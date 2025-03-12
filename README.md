@@ -3,7 +3,6 @@ A Model Context Protocol (MCP) server implementation for GreptimeDB.
 
 This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
 
-
 # Installation
 
 ```
@@ -80,3 +79,11 @@ MIT License - see LICENSE.md file for details.
 - Python with `uv` package manager
 - GreptimeDB installation
 - MCP server dependencies
+
+# Acknowledgement
+This library's implementation was inspired by the following two repositories and incorporates their code, for which we express our gratitude：
+
+* [ktanaka101/mcp-server-duckdb](https://github.com/ktanaka101/mcp-server-duckdb)
+* [designcomputer/mysql_mcp_server)](https://github.com/designcomputer/mysql_mcp_server)
+
+Thanks!
