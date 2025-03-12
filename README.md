@@ -73,12 +73,30 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
 
 MIT License - see LICENSE.md file for details.
 
-# Development
+# Contribute
 
 ## Prerequisites
 - Python with `uv` package manager
 - GreptimeDB installation
 - MCP server dependencies
+
+## Development
+
+```
+# Clone the repository
+git clone https://github.com/GreptimeTeam/greptimedb-mcp-server.git
+cd greptimedb-mcp-server
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+
+# Install development dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+pytest
+```
 
 # Acknowledgement
 This library's implementation was inspired by the following two repositories and incorporates their code, for which we express our gratitude：
