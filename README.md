@@ -59,7 +59,7 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
       ],
       "env": {
         "GREPTIMEDB_HOST": "localhost",
-        "GREPTIMEDB_PORT": "3306",
+        "GREPTIMEDB_PORT": "4002",
         "GREPTIMEDB_USER": "root",
         "GREPTIMEDB_PASSWORD": "",
         "GREPTIMEDB_DATABASE": "public"
