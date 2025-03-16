@@ -68,7 +68,7 @@ async def main(config: Config):
         if not uri_str.startswith("greptime://"):
             raise ValueError(f"Invalid URI scheme: {uri_str}")
 
-        parts = uri_str[8:].split('/')
+        parts = uri_str[11:].split('/')
         table = parts[0]
 
         try:
@@ -78,7 +78,7 @@ async def main(config: Config):
                     columns = [desc[0] for desc in cursor.description]
                     rows = cursor.fetchall()
                     result = [",".join(map(str, row)) for row in rows]
-                    return "\n".join([",".join(columns)] + result)
+            return "\n".join([",".join(columns)] + result)
 
         except Error as e:
             logger.error(f"Database error reading resource {uri}: {str(e)}")
