@@ -1,4 +1,5 @@
 from greptimedb_mcp_server.config import Config
+from greptimedb_mcp_server.utils import security_gate
 
 import asyncio
 import logging
@@ -53,7 +54,7 @@ async def main(config: Config):
                                 description=f"Data in table: {table[0]}"
                             )
                         )
-                        return resources
+                    return resources
         except Error as e:
             logger.error(f"Failed to list resources: {str(e)}")
             return []
@@ -115,7 +116,11 @@ async def main(config: Config):
         query = arguments.get("query")
         if not query:
             raise ValueError("Query is required")
-
+        # Check if query is dangerous
+        is_dangerous,reason = security_gate(query=query)
+        if is_dangerous:
+            return [TextContent(type="text", text="Error: Contain dangerous operations, reason:" + reason)]
+        
         try:
             with connect(**config) as conn:
                 with conn.cursor() as cursor:
@@ -138,7 +143,7 @@ async def main(config: Config):
                     # Non-SELECT queries
                     else:
                         conn.commit()
-                        return eturn [TextContent(type="text", text=f"Query executed successfully. Rows affected: {cursor.rowcount}")]
+                        return [TextContent(type="text", text=f"Query executed successfully. Rows affected: {cursor.rowcount}")]
 
         except Error as e:
             logger.error(f"Error executing SQL '{query}': {e}")
