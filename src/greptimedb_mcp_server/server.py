@@ -3,6 +3,7 @@ from greptimedb_mcp_server.utils import security_gate
 
 import asyncio
 import logging
+from logging import Logger
 from mysql.connector import connect, Error
 from mcp.server import Server
 from mcp.types import Resource, Tool, TextContent
@@ -14,29 +15,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-async def main(config: Config):
-    """Main entry point to run the MCP server."""
-    from mcp.server.stdio import stdio_server
+# The GreptimeDB MCP Server
+class DatabaseServer:
+    def __init__(self, logger: Logger, config: Config):
+        """Initialize the GreptimeDB MCP server"""
+        self.app = Server("greptimedb_mcp_server")
+        self.logger = logger
+        self.db_config =  {
+            "host": config.host,
+            "port": config.port,
+            "user": config.user,
+            "password": config.password,
+            "database": config.database
+        };
+        self.logger.info(f"GreptimeDB Config: {self.db_config}")
 
+        # Register callbacks
+        self.app.list_resources()(self.list_resources)
+        self.app.read_resource()(self.read_resource)
+        self.app.list_tools()(self.list_tools)
+        self.app.call_tool()(self.call_tool)
 
-    logger = logging.getLogger("greptimedb_mcp_server")
-
-    # Initialize server
-    app = Server("greptimedb_mcp_server")
-
-    config = {
-        "host": config.host,
-        "port": config.port,
-        "user": config.user,
-        "password": config.password,
-        "database": config.database
-    }
-
-    logger.info(f"GreptimeDB Config: {config}")
-
-    @app.list_resources()
-    async def list_resources() -> list[Resource]:
+    async def list_resources(self) -> list[Resource]:
         """List GreptimeDB tables as resources."""
+        logger = self.logger
+        config = self.db_config
+
         try:
             with connect(**config) as conn:
                 with conn.cursor() as cursor:
@@ -59,9 +63,11 @@ async def main(config: Config):
             logger.error(f"Failed to list resources: {str(e)}")
             return []
 
-    @app.read_resource()
-    async def read_resource(uri: AnyUrl) -> str:
+    async def read_resource(self, uri: AnyUrl) -> str:
         """Read table contents."""
+        logger = self.logger
+        config = self.db_config
+
         uri_str = str(uri)
         logger.info(f"Reading resource: {uri_str}")
 
@@ -84,9 +90,11 @@ async def main(config: Config):
             logger.error(f"Database error reading resource {uri}: {str(e)}")
             raise RuntimeError(f"Database error: {str(e)}")
 
-    @app.list_tools()
-    async def list_tools() -> list[Tool]:
+    async def list_tools(self) -> list[Tool]:
         """List available GreptimeDB tools."""
+        logger = self.logger
+        config = self.db_config
+
         logger.info("Listing tools...")
         return [
             Tool(
@@ -105,9 +113,11 @@ async def main(config: Config):
             )
         ]
 
-    @app.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    async def call_tool(self, name: str, arguments: dict) -> list[TextContent]:
         """Execute SQL commands."""
+        logger = self.logger
+        config = self.db_config
+
         logger.info(f"Calling tool: {name} with arguments: {arguments}")
 
         if name != "execute_sql":
@@ -120,7 +130,7 @@ async def main(config: Config):
         is_dangerous,reason = security_gate(query=query)
         if is_dangerous:
             return [TextContent(type="text", text="Error: Contain dangerous operations, reason:" + reason)]
-        
+
         try:
             with connect(**config) as conn:
                 with conn.cursor() as cursor:
@@ -150,20 +160,33 @@ async def main(config: Config):
             return [TextContent(type="text", text=f"Error executing query: {str(e)}")]
 
 
+    async def run(self):
+        """Run the MCP server."""
+        logger = self.logger
+        from mcp.server.stdio import stdio_server
+
+        async with stdio_server() as (read_stream, write_stream):
+            try:
+                await self.app.run(
+                    read_stream,
+                    write_stream,
+                    self.app.create_initialization_options()
+                )
+            except Exception as e:
+                logger.error(f"Server error: {str(e)}", exc_info=True)
+                raise
+
+
+async def main(config: Config):
+    """Main entry point to run the MCP server."""
+    logger = logging.getLogger("greptimedb_mcp_server")
+
+    db_server = DatabaseServer(logger, config)
+
     logger.info("Starting GreptimeDB MCP server...")
-    logger.info(f"Database config: {config['host']}/{config['database']} as {config['user']}")
 
+    await db_server.run()
 
-    async with stdio_server() as (read_stream, write_stream):
-        try:
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options()
-            )
-        except Exception as e:
-            logger.error(f"Server error: {str(e)}", exc_info=True)
-            raise
 
 
 if __name__ == "__main__":
