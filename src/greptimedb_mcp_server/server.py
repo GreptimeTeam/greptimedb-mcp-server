@@ -8,9 +8,12 @@ from mysql.connector import connect, Error
 from mcp.server import Server
 from mcp.types import Resource, Tool, TextContent
 from pydantic import AnyUrl
+from typing import Optional, Dict, List
 
 # Resource URI prefix
 RES_PREFIX = "greptime://"
+# Resource query results limit
+RESULTS_LIMIT = 100
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +34,7 @@ class DatabaseServer:
             "password": config.password,
             "database": config.database
         };
+
         self.logger.info(f"GreptimeDB Config: {self.db_config}")
 
         # Register callbacks
@@ -83,7 +87,7 @@ class DatabaseServer:
         try:
             with connect(**config) as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute(f"SELECT * FROM {table} LIMIT 100")
+                    cursor.execute(f"SELECT * FROM {table} LIMIT {RESULTS_LIMIT}")
                     columns = [desc[0] for desc in cursor.description]
                     rows = cursor.fetchall()
                     result = [",".join(map(str, row)) for row in rows]
@@ -102,13 +106,13 @@ class DatabaseServer:
         return [
             Tool(
                 name="execute_sql",
-                description="Execute an SQL query on the GreptimeDB server",
+                description="Execute SQL query against GreptimeDB. Please use MySQL dialect when generating SQL queries.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "The SQL query to execute"
+                            "description": "The SQL query to execute (using MySQL dialect)"
                         }
                     },
                     "required": ["query"]
@@ -129,6 +133,7 @@ class DatabaseServer:
         query = arguments.get("query")
         if not query:
             raise ValueError("Query is required")
+
         # Check if query is dangerous
         is_dangerous,reason = security_gate(query=query)
         if is_dangerous:
@@ -178,7 +183,6 @@ class DatabaseServer:
             except Exception as e:
                 logger.error(f"Server error: {str(e)}", exc_info=True)
                 raise
-
 
 async def main(config: Config):
     """Main entry point to run the MCP server."""
