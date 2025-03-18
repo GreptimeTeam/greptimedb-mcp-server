@@ -144,15 +144,16 @@ class DatabaseServer:
                 with conn.cursor() as cursor:
                     cursor.execute(query)
 
+                    stmt = query.strip().upper()
                     # Special handling for SHOW TABLES
-                    if query.strip().upper().startswith("SHOW TABLES"):
+                    if stmt.startswith("SHOW TABLES"):
                         tables = cursor.fetchall()
                         result = ["Tables_in_" + config["database"]]  # Header
                         result.extend([table[0] for table in tables])
                         return [TextContent(type="text", text="\n".join(result))]
 
                     # Regular SELECT queries
-                    elif query.strip().upper().startswith("SELECT") or query.strip().upper().startswith("DESCRIBE"):
+                    elif stmt.startswith("SELECT") or stmt.startswith("DESCRIBE"):
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
                         result = [",".join(map(str, row)) for row in rows]
