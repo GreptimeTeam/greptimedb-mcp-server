@@ -34,7 +34,6 @@ class Config:
     GreptimeDB database name
     """
 
-
     @staticmethod
     def from_env_arguments() -> "Config":
         """

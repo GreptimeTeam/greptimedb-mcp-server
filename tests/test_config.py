@@ -1,8 +1,7 @@
 import os
-import pytest
-import sys
 from unittest.mock import patch
 from greptimedb_mcp_server.config import Config
+
 
 def test_config_default_values():
     """
@@ -17,6 +16,7 @@ def test_config_default_values():
             assert config.database == 'public'
             assert config.user == ''
             assert config.password == ''
+
 
 def test_config_env_variables():
     """
@@ -40,6 +40,7 @@ def test_config_env_variables():
             assert config.user == 'test_user'
             assert config.password == 'test_password'
 
+
 def test_config_cli_arguments():
     """
     Test configuration via command-line arguments
@@ -62,6 +63,7 @@ def test_config_cli_arguments():
             assert config.database == 'cli_db'
             assert config.user == 'cli_user'
             assert config.password == 'cli_password'
+
 
 def test_config_precedence():
     """
@@ -93,6 +95,7 @@ def test_config_precedence():
             assert config.database == 'cli_db'
             assert config.user == 'cli_user'
             assert config.password == 'cli_password'
+
 
 def test_config_object_creation():
     """
