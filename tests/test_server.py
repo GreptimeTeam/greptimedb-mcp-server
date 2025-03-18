@@ -6,6 +6,7 @@ import logging
 from greptimedb_mcp_server.server import DatabaseServer
 from greptimedb_mcp_server.config import Config
 
+
 @pytest.fixture
 def config():
     """Create a test configuration"""
@@ -17,10 +18,12 @@ def config():
         database="testdb"
     )
 
+
 @pytest.fixture
 def logger():
     """Create a test logger"""
     return logging.getLogger("test_logger")
+
 
 @pytest.mark.asyncio
 async def test_list_resources(logger, config):
@@ -33,6 +36,7 @@ async def test_list_resources(logger, config):
     assert resources[0].name == "Table: users"
     assert str(resources[0].uri) == "greptime://users/data"
 
+
 @pytest.mark.asyncio
 async def test_read_resource(logger, config):
     """Test reading a specific database resource"""
@@ -44,6 +48,7 @@ async def test_read_resource(logger, config):
     assert "1,John" in result
     assert "2,Jane" in result
 
+
 @pytest.mark.asyncio
 async def test_list_tools(logger, config):
     """Test listing available database tools"""
@@ -54,6 +59,7 @@ async def test_list_tools(logger, config):
     assert len(tools) == 1
     assert tools[0].name == "execute_sql"
     assert "query" in tools[0].inputSchema['properties']
+
 
 @pytest.mark.asyncio
 async def test_call_tool_select_query(logger, config):
@@ -69,6 +75,7 @@ async def test_call_tool_select_query(logger, config):
     assert "id,name" in result[0].text
     assert "1,John" in result[0].text
 
+
 @pytest.mark.asyncio
 async def test_security_gate_dangerous_query(logger, config):
     """Test security gate blocking dangerous queries"""
@@ -82,6 +89,7 @@ async def test_security_gate_dangerous_query(logger, config):
     # Verify that the security gate blocked the query
     assert "Error: Contain dangerous operations" in result[0].text
     assert "Forbided `DROP` operation" in result[0].text
+
 
 @pytest.mark.asyncio
 async def test_show_tables_query(logger, config):
@@ -97,6 +105,7 @@ async def test_show_tables_query(logger, config):
     assert "Tables_in_testdb" in result[0].text
     assert "users" in result[0].text
     assert "orders" in result[0].text
+
 
 def test_server_initialization(logger, config):
     """Test server initialization with configuration"""
