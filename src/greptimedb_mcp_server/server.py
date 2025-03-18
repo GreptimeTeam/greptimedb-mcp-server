@@ -152,7 +152,7 @@ class DatabaseServer:
                         return [TextContent(type="text", text="\n".join(result))]
 
                     # Regular SELECT queries
-                    elif query.strip().upper().startswith("SELECT"):
+                    elif query.strip().upper().startswith("SELECT") or query.strip().upper().startswith("DESCRIBE"):
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
                         result = [",".join(map(str, row)) for row in rows]
