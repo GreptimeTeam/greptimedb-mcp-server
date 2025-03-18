@@ -9,6 +9,9 @@ from mcp.server import Server
 from mcp.types import Resource, Tool, TextContent
 from pydantic import AnyUrl
 
+# Resource URI prefix
+RES_PREFIX = "greptime://"
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +55,7 @@ class DatabaseServer:
                     for table in tables:
                         resources.append(
                             Resource(
-                                uri=f"greptime://{table[0]}/data",
+                                uri=f"{RES_PREFIX}{table[0]}/data",
                                 name=f"Table: {table[0]}",
                                 mimeType="text/plain",
                                 description=f"Data in table: {table[0]}"
@@ -71,10 +74,10 @@ class DatabaseServer:
         uri_str = str(uri)
         logger.info(f"Reading resource: {uri_str}")
 
-        if not uri_str.startswith("greptime://"):
+        if not uri_str.startswith(RES_PREFIX):
             raise ValueError(f"Invalid URI scheme: {uri_str}")
 
-        parts = uri_str[11:].split('/')
+        parts = uri_str[len(RES_PREFIX):].split('/')
         table = parts[0]
 
         try:
