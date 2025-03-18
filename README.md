@@ -98,6 +98,17 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+Use [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) for debugging:
+
+```bash
+npx @modelcontextprotocol/inspector uv \
+  --directory \
+  /path/to/greptimedb-mcp-server \
+  run \
+  -m \
+  greptimedb_mcp_server.server
+```
+
 # Acknowledgement
 This library's implementation was inspired by the following two repositories and incorporates their code, for which we express our gratitude：
 

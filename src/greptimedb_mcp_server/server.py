@@ -180,14 +180,11 @@ class DatabaseServer:
 async def main(config: Config):
     """Main entry point to run the MCP server."""
     logger = logging.getLogger("greptimedb_mcp_server")
-
     db_server = DatabaseServer(logger, config)
 
     logger.info("Starting GreptimeDB MCP server...")
 
     await db_server.run()
-
-
 
 if __name__ == "__main__":
     asyncio.run(main(Config.from_env_arguments()))
