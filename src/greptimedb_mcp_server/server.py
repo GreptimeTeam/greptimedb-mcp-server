@@ -8,7 +8,6 @@ from mysql.connector import connect, Error
 from mcp.server import Server
 from mcp.types import Resource, Tool, TextContent
 from pydantic import AnyUrl
-from typing import Optional, Dict, List
 
 # Resource URI prefix
 RES_PREFIX = "greptime://"
@@ -21,19 +20,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+
 # The GreptimeDB MCP Server
 class DatabaseServer:
     def __init__(self, logger: Logger, config: Config):
         """Initialize the GreptimeDB MCP server"""
         self.app = Server("greptimedb_mcp_server")
         self.logger = logger
-        self.db_config =  {
+        self.db_config = {
             "host": config.host,
             "port": config.port,
             "user": config.user,
             "password": config.password,
             "database": config.database
-        };
+        }
 
         self.logger.info(f"GreptimeDB Config: {self.db_config}")
 
@@ -100,7 +100,6 @@ class DatabaseServer:
     async def list_tools(self) -> list[Tool]:
         """List available GreptimeDB tools."""
         logger = self.logger
-        config = self.db_config
 
         logger.info("Listing tools...")
         return [
@@ -135,7 +134,7 @@ class DatabaseServer:
             raise ValueError("Query is required")
 
         # Check if query is dangerous
-        is_dangerous,reason = security_gate(query=query)
+        is_dangerous, reason = security_gate(query=query)
         if is_dangerous:
             return [TextContent(type="text", text="Error: Contain dangerous operations, reason:" + reason)]
 
@@ -162,12 +161,12 @@ class DatabaseServer:
                     # Non-SELECT queries
                     else:
                         conn.commit()
-                        return [TextContent(type="text", text=f"Query executed successfully. Rows affected: {cursor.rowcount}")]
+                        return [TextContent(type="text",
+                                            text=f"Query executed successfully. Rows affected: {cursor.rowcount}")]
 
         except Error as e:
             logger.error(f"Error executing SQL '{query}': {e}")
             return [TextContent(type="text", text=f"Error executing query: {str(e)}")]
-
 
     async def run(self):
         """Run the MCP server."""
@@ -184,6 +183,7 @@ class DatabaseServer:
             except Exception as e:
                 logger.error(f"Server error: {str(e)}", exc_info=True)
                 raise
+
 
 async def main(config: Config):
     """Main entry point to run the MCP server."""

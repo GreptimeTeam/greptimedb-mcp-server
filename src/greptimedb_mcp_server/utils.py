@@ -3,6 +3,7 @@ import logging
 
 logger = logging.getLogger("greptimedb_mcp_server")
 
+
 def security_gate(query: str) -> tuple[bool, str]:
     """
     Check if a SQL query is dangerous and should be blocked.
