@@ -88,7 +88,7 @@ class DatabaseServer:
         self.app.get_prompt()(self.get_prompt)
         self.app.list_tools()(self.list_tools)
         self.app.call_tool()(self.call_tool)
-       
+
     async def list_resources(self) -> list[Resource]:
         """List GreptimeDB tables as resources."""
         logger = self.logger
