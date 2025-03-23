@@ -1,62 +1,18 @@
 from greptimedb_mcp_server.config import Config
-from greptimedb_mcp_server.utils import security_gate
+from greptimedb_mcp_server.utils import security_gate, templates_loader
 
 import asyncio
 import logging
 from logging import Logger
 from mysql.connector import connect, Error
 from mcp.server import Server
-from mcp.types import Resource, Tool, TextContent, Prompt, PromptArgument, GetPromptResult, PromptMessage
+from mcp.types import Resource, Tool, TextContent, Prompt, GetPromptResult, PromptMessage
 from pydantic import AnyUrl
 
 # Resource URI prefix
 RES_PREFIX = "greptime://"
 # Resource query results limit
 RESULTS_LIMIT = 100
-# Prompt template
-PROMPT_TEMPLATE = """
-The assistant's goal is to help users query data from GreptimeDB MCP server. GreptimeDB is an time series database unifying metrics, logs, and events.
-
-<mcp-capabilities>
-Prompts: 
-This server provides prompts to help structure interactions with GreptimeDB. 
-Resources:
-The server exposes GreptimeDB tables as resources in the format: "greptime://<table_name>/data"
-Tools:
-- "execute_sql": Execute SQL queries against GreptimeDB (using MySQL dialect)
-</mcp-capabilities>
-
-<guidelines>
-When using GreptimeDB:
-1. The user has chosen the topic: {topic}.
-
-2. Time range is crucial - always specify a time range in your queries, you can get time range from user input: {time_range} or use default value.
-   Example: `SELECT * FROM table_name WHERE time > now() - 1h`
-
-3. To explore available data:
-   - Use `SHOW TABLES` to list all tables
-   - Use `DESCRIBE table_name` to see a table's schema
-
-4. Follow SQL best practices:
-   - Use appropriate filtering to limit result sets
-   - Consider using aggregation functions for time series data
-   - Leverage GreptimeDB's built-in time functions
-
-5. Security considerations:
-   - The server will block dangerous operations 
-   - Focus on read operations unless data creation is specifically needed
-</guidelines>
-
-Your task is to help the user interact with GreptimeDB by:
-1. Understanding their data needs and questions
-2. Suggesting appropriate SQL queries using the `execute_sql` tool
-3. Explaining query results in a clear, informative way
-4. Helping them analyze time series data effectively
-
-Always format SQL queries properly and explain what each query does. Remember that GreptimeDB specializes in time series data, so time-based operations and aggregations are particularly relevant.
-
-If you don't know how to answer a specific question, suggest exploring the schema first to understand the available data structure.
-"""
 
 # Configure logging
 logging.basicConfig(
@@ -78,6 +34,7 @@ class DatabaseServer:
             "password": config.password,
             "database": config.database
         }
+        self.templates = templates_loader()
 
         self.logger.info(f"GreptimeDB Config: {self.db_config}")
 
@@ -145,47 +102,41 @@ class DatabaseServer:
 
     async def list_prompts(self) -> list[Prompt]:
         """List available GreptimeDB prompts."""
-        return [
-            Prompt(
-                name="greptime-mcp-server",
-                description="A prompt that can be used to interact with GreptimeDB",
-                arguments=[
-                    PromptArgument(
-                        name="topic",
-                        description="Specific topic to focus on in the conversation",
-                        required=False,
-                    ),
-                    PromptArgument(
-                        name="time_range",
-                        description="Time range for queries (e.g. '1h', '7d', '30m'), default is 1 hour",
-                        required=False,
-                    ),
-                ],
+        prompts = []
+        for name, template in self.templates.items():
+            prompts.append(
+                Prompt(
+                    name=name,
+                    description=template['config']['description'],
+                    arguments=template['config']['arguments']
+                )
             )
-        ]
+        return prompts
    
     async def get_prompt(self,name: str, arguments: dict[str, str] | None) -> GetPromptResult:
         """Handle the get_prompt request."""
-        logger = self.logger
-        logger.debug(f"Handling get_prompt request for {name} with args {arguments}")
-        if name != "greptime-mcp-server":
-            logger.error(f"Unknown prompt: {name}")
-            raise ValueError(f"Unknown prompt: {name}")
+        if name not in self.templates:
+            raise ValueError(f"Unknown template: {name}")
+    
+        template = self.templates[name]
+        formatted_template = template['template']
         
-        logger.info(f"Generating prompt for {name} with args {arguments}")
+        # Replace placeholders with arguments
+        if arguments:
+            for key, value in arguments.items():
+                formatted_template = formatted_template.replace(f"{{{{ {key} }}}}", value)
         
-        # Generate the prompt based on the provided arguments
-        topic, time_range = arguments.get("topic","No topic"), arguments.get("time_range", "1h")
-        prompt = PROMPT_TEMPLATE.format(topic=topic, time_range=time_range)
-
         return GetPromptResult(
-            description=f"Prompt for GreptimeDB assistant",
+            description=template['config']['description'],
             messages=[
                 PromptMessage(
                     role="user",
-                    content=TextContent(type="text", text=prompt.strip()),
+                    content=TextContent(
+                        type="text",
+                        text=formatted_template
+                    )
                 )
-            ],
+            ]
         )
 
     async def list_tools(self) -> list[Tool]:
