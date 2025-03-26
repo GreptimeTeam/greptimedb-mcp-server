@@ -122,7 +122,7 @@ npx @modelcontextprotocol/inspector uv \
 This library's implementation was inspired by the following two repositories and incorporates their code, for which we express our gratitude：
 
 * [ktanaka101/mcp-server-duckdb](https://github.com/ktanaka101/mcp-server-duckdb)
-* [designcomputer/mysql_mcp_server)](https://github.com/designcomputer/mysql_mcp_server)
+* [designcomputer/mysql_mcp_server](https://github.com/designcomputer/mysql_mcp_server)
 * [mikeskarl/mcp-prompt-templates](https://github.com/mikeskarl/mcp-prompt-templates)
 
 Thanks!
