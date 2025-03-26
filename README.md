@@ -1,7 +1,16 @@
 # greptimedb-mcp-server
-A Model Context Protocol (MCP) server implementation for GreptimeDB.
+A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
 
 This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
+
+# Capabilities
+
+* `list_resources` to list tables
+* `read_resource` to read table data
+* `list_tools` to list tools
+* `call_too` to execute an SQL
+* `list_prompts` to list prompts
+* `get_prompt` to get the prompt by name
 
 # Installation
 
@@ -114,5 +123,6 @@ This library's implementation was inspired by the following two repositories and
 
 * [ktanaka101/mcp-server-duckdb](https://github.com/ktanaka101/mcp-server-duckdb)
 * [designcomputer/mysql_mcp_server)](https://github.com/designcomputer/mysql_mcp_server)
+* [mikeskarl/mcp-prompt-templates](https://github.com/mikeskarl/mcp-prompt-templates)
 
 Thanks!
