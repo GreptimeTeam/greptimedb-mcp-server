@@ -31,6 +31,9 @@ dev-dependencies = [
   "pyright",
   "black",
   "flake8",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
 ]
 
 [project.scripts]
