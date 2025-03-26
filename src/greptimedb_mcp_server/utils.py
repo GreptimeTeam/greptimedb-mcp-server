@@ -1,5 +1,7 @@
 import re
 import logging
+import yaml
+import os
 
 logger = logging.getLogger("greptimedb_mcp_server")
 
@@ -31,3 +33,25 @@ def security_gate(query: str) -> tuple[bool, str]:
             return True, reason
 
     return False, ""
+
+def templates_loader() -> dict[str, dict[str, str]]:
+    templates = {}
+    template_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'templates')
+    
+    for category in os.listdir(template_dir):
+        category_path = os.path.join(template_dir, category)
+        if os.path.isdir(category_path):
+            # Load config
+            with open(os.path.join(category_path, 'config.yaml'), 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Load template
+            with open(os.path.join(category_path, 'template.md'), 'r') as f:
+                template = f.read()
+            
+            templates[category] = {
+                'config': config,
+                'template': template
+            }
+    
+    return templates

@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
     "mysql-connector-python>=9.1.0",
+    "pyyaml>=6.0.2",
 ]
 [[project.authors]]
 name = "dennis zhuang"

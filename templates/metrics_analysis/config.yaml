@@ -1,0 +1,20 @@
+description: "Comprehensive metrics analysis template for monitoring and analyzing data from GreptimeDB"
+version: "1.0"
+arguments:
+  - name: "topic"
+    description: "Topic or area of metrics to analyze"
+    required: false
+  - name: "start_time"
+    description: "Start time for the analysis period, example:(2025-01-01T00:00:00Z, now)"
+    required: true
+  - name: "end_time"
+    description: "End time for the analysis period, example:(2025-01-01T01:00:00Z, now-1h)"
+    required: true
+metadata:
+  tags:
+    - monitoring
+    - metrics
+    - performance
+  suggested_use: "Use for system performance monitoring, resource usage analysis, and identifying performance bottlenecks"
+  output_format: "markdown"
+ 
