@@ -82,4 +82,5 @@ class Config:
             port=args.port,
             database=args.database,
             user=args.user,
-            password=args.password)
+            password=args.password,
+        )

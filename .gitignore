@@ -24,3 +24,5 @@ uv.lock
 *.dist-info/
 # Mac files
 .DS_Store
+
+.envrc

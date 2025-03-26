@@ -6,7 +6,14 @@ import logging
 from logging import Logger
 from mysql.connector import connect, Error
 from mcp.server import Server
-from mcp.types import Resource, Tool, TextContent, Prompt, GetPromptResult, PromptMessage
+from mcp.types import (
+    Resource,
+    Tool,
+    TextContent,
+    Prompt,
+    GetPromptResult,
+    PromptMessage,
+)
 from pydantic import AnyUrl
 
 # Resource URI prefix
@@ -16,8 +23,7 @@ RESULTS_LIMIT = 100
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 
@@ -32,7 +38,7 @@ class DatabaseServer:
             "port": config.port,
             "user": config.user,
             "password": config.password,
-            "database": config.database
+            "database": config.database,
         }
         self.templates = templates_loader()
 
@@ -65,7 +71,7 @@ class DatabaseServer:
                                 uri=f"{RES_PREFIX}{table[0]}/data",
                                 name=f"Table: {table[0]}",
                                 mimeType="text/plain",
-                                description=f"Data in table: {table[0]}"
+                                description=f"Data in table: {table[0]}",
                             )
                         )
                     return resources
@@ -84,7 +90,7 @@ class DatabaseServer:
         if not uri_str.startswith(RES_PREFIX):
             raise ValueError(f"Invalid URI scheme: {uri_str}")
 
-        parts = uri_str[len(RES_PREFIX):].split('/')
+        parts = uri_str[len(RES_PREFIX) :].split("/")
         table = parts[0]
 
         try:
@@ -111,13 +117,15 @@ class DatabaseServer:
             prompts.append(
                 Prompt(
                     name=name,
-                    description=template['config']['description'],
-                    arguments=template['config']['arguments']
+                    description=template["config"]["description"],
+                    arguments=template["config"]["arguments"],
                 )
             )
         return prompts
 
-    async def get_prompt(self,name: str, arguments: dict[str, str] | None) -> GetPromptResult:
+    async def get_prompt(
+        self, name: str, arguments: dict[str, str] | None
+    ) -> GetPromptResult:
         """Handle the get_prompt request."""
         logger = self.logger
 
@@ -127,24 +135,23 @@ class DatabaseServer:
             raise ValueError(f"Unknown template: {name}")
 
         template = self.templates[name]
-        formatted_template = template['template']
+        formatted_template = template["template"]
 
         # Replace placeholders with arguments
         if arguments:
             for key, value in arguments.items():
-                formatted_template = formatted_template.replace(f"{{{{ {key} }}}}", value)
+                formatted_template = formatted_template.replace(
+                    f"{{{{ {key} }}}}", value
+                )
 
         return GetPromptResult(
-            description=template['config']['description'],
+            description=template["config"]["description"],
             messages=[
                 PromptMessage(
                     role="user",
-                    content=TextContent(
-                        type="text",
-                        text=formatted_template
-                    )
+                    content=TextContent(type="text", text=formatted_template),
                 )
-            ]
+            ],
         )
 
     async def list_tools(self) -> list[Tool]:
@@ -161,11 +168,11 @@ class DatabaseServer:
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "The SQL query to execute (using MySQL dialect)"
+                            "description": "The SQL query to execute (using MySQL dialect)",
                         }
                     },
-                    "required": ["query"]
-                }
+                    "required": ["query"],
+                },
             )
         ]
 
@@ -186,7 +193,12 @@ class DatabaseServer:
         # Check if query is dangerous
         is_dangerous, reason = security_gate(query=query)
         if is_dangerous:
-            return [TextContent(type="text", text="Error: Contain dangerous operations, reason:" + reason)]
+            return [
+                TextContent(
+                    type="text",
+                    text="Error: Contain dangerous operations, reason:" + reason,
+                )
+            ]
 
         try:
             with connect(**config) as conn:
@@ -205,13 +217,22 @@ class DatabaseServer:
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
                         result = [",".join(map(str, row)) for row in rows]
-                        return [TextContent(type="text", text="\n".join([",".join(columns)] + result))]
+                        return [
+                            TextContent(
+                                type="text",
+                                text="\n".join([",".join(columns)] + result),
+                            )
+                        ]
 
                     # Non-SELECT queries
                     else:
                         conn.commit()
-                        return [TextContent(type="text",
-                                            text=f"Query executed successfully. Rows affected: {cursor.rowcount}")]
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Query executed successfully. Rows affected: {cursor.rowcount}",
+                            )
+                        ]
 
         except Error as e:
             logger.error(f"Error executing SQL '{query}': {e}")
@@ -225,9 +246,7 @@ class DatabaseServer:
         async with stdio_server() as (read_stream, write_stream):
             try:
                 await self.app.run(
-                    read_stream,
-                    write_stream,
-                    self.app.create_initialization_options()
+                    read_stream, write_stream, self.app.create_initialization_options()
                 )
             except Exception as e:
                 logger.error(f"Server error: {str(e)}", exc_info=True)
@@ -242,6 +261,7 @@ async def main(config: Config):
     logger.info("Starting GreptimeDB MCP server...")
 
     await db_server.run()
+
 
 if __name__ == "__main__":
     asyncio.run(main(Config.from_env_arguments()))

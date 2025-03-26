@@ -26,5 +26,12 @@ exclude = [
     ".gitignore"
 ]
 
+[tool.uv]
+dev-dependencies = [
+  "pyright",
+  "black",
+  "flake8",
+]
+
 [project.scripts]
 greptimedb-mcp-server = "greptimedb_mcp_server:main"
