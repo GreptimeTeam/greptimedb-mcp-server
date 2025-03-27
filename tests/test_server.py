@@ -1,4 +1,3 @@
-
 import pytest
 import logging
 
@@ -15,7 +14,7 @@ def config():
         port=4002,
         user="testuser",
         password="testpassword",
-        database="testdb"
+        database="testdb",
     )
 
 
@@ -58,17 +57,14 @@ async def test_list_tools(logger, config):
     # Verify the tool list
     assert len(tools) == 1
     assert tools[0].name == "execute_sql"
-    assert "query" in tools[0].inputSchema['properties']
+    assert "query" in tools[0].inputSchema["properties"]
 
 
 @pytest.mark.asyncio
 async def test_call_tool_select_query(logger, config):
     """Test executing a SELECT query via tool"""
     server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql",
-        {"query": "SELECT * FROM users"}
-    )
+    result = await server.call_tool("execute_sql", {"query": "SELECT * FROM users"})
 
     # Verify the results
     assert len(result) == 1
@@ -81,10 +77,7 @@ async def test_security_gate_dangerous_query(logger, config):
     """Test security gate blocking dangerous queries"""
     server = DatabaseServer(logger, config)
 
-    result = await server.call_tool(
-        "execute_sql",
-        {"query": "DROP TABLE users"}
-    )
+    result = await server.call_tool("execute_sql", {"query": "DROP TABLE users"})
 
     # Verify that the security gate blocked the query
     assert "Error: Contain dangerous operations" in result[0].text
@@ -95,16 +88,14 @@ async def test_security_gate_dangerous_query(logger, config):
 async def test_show_tables_query(logger, config):
     """Test SHOW TABLES query execution"""
     server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql",
-        {"query": "SHOW TABLES"}
-    )
+    result = await server.call_tool("execute_sql", {"query": "SHOW TABLES"})
 
     # Verify the results
     assert len(result) == 1
     assert "Tables_in_testdb" in result[0].text
     assert "users" in result[0].text
     assert "orders" in result[0].text
+
 
 @pytest.mark.asyncio
 async def test_list_prompts(logger, config):
@@ -201,8 +192,8 @@ def test_server_initialization(logger, config):
 
     # Verify the server was initialized correctly
     assert server.logger == logger
-    assert server.db_config['host'] == 'localhost'
-    assert server.db_config['port'] == 4002
-    assert server.db_config['user'] == 'testuser'
-    assert server.db_config['password'] == 'testpassword'
-    assert server.db_config['database'] == 'testdb'
+    assert server.db_config["host"] == "localhost"
+    assert server.db_config["port"] == 4002
+    assert server.db_config["user"] == "testuser"
+    assert server.db_config["password"] == "testpassword"
+    assert server.db_config["database"] == "testdb"

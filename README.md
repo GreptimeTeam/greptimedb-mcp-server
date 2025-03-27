@@ -97,11 +97,11 @@ git clone https://github.com/GreptimeTeam/greptimedb-mcp-server.git
 cd greptimedb-mcp-server
 
 # Create virtual environment
-python -m venv venv
+uv venv
 source venv/bin/activate  # or `venv\Scripts\activate` on Windows
 
 # Install development dependencies
-pip install -r requirements-dev.txt
+uv sync
 
 # Run tests
 pytest
