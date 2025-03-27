@@ -8,7 +8,7 @@ This server provides AI assistants with a secure and structured way to explore a
 * `list_resources` to list tables
 * `read_resource` to read table data
 * `list_tools` to list tools
-* `call_too` to execute an SQL
+* `call_tool` to execute an SQL
 * `list_prompts` to list prompts
 * `get_prompt` to get the prompt by name
 
