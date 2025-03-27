@@ -102,8 +102,12 @@ class DatabaseServer:
 
     async def list_prompts(self) -> list[Prompt]:
         """List available GreptimeDB prompts."""
+        logger = self.logger
+
+        logger.info("Listing prompts...")
         prompts = []
         for name, template in self.templates.items():
+            logger.info(f"Found prompt: {name}")
             prompts.append(
                 Prompt(
                     name=name,
@@ -112,20 +116,24 @@ class DatabaseServer:
                 )
             )
         return prompts
-   
+
     async def get_prompt(self,name: str, arguments: dict[str, str] | None) -> GetPromptResult:
         """Handle the get_prompt request."""
+        logger = self.logger
+
+        logger.info(f"Get prompt: {name}")
         if name not in self.templates:
+            logger.error(f"Unknown template: {name}")
             raise ValueError(f"Unknown template: {name}")
-    
+
         template = self.templates[name]
         formatted_template = template['template']
-        
+
         # Replace placeholders with arguments
         if arguments:
             for key, value in arguments.items():
                 formatted_template = formatted_template.replace(f"{{{{ {key} }}}}", value)
-        
+
         return GetPromptResult(
             description=template['config']['description'],
             messages=[
@@ -192,7 +200,6 @@ class DatabaseServer:
                         result = ["Tables_in_" + config["database"]]  # Header
                         result.extend([table[0] for table in tables])
                         return [TextContent(type="text", text="\n".join(result))]
-
                     # Regular SELECT queries
                     elif stmt.startswith("SELECT") or stmt.startswith("DESCRIBE"):
                         columns = [desc[0] for desc in cursor.description]
