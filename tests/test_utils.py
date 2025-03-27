@@ -1,6 +1,7 @@
 import pytest
 from greptimedb_mcp_server.utils import templates_loader
 
+
 def test_templates_loader_basic():
     """Test that templates_loader can load existing templates"""
     # Call the function under test
@@ -32,10 +33,14 @@ def test_templates_loader_basic():
     arguments = config["arguments"]
     assert isinstance(arguments, list), "Expected arguments to be a list"
 
-    arg_names = [arg.get("name") for arg in arguments if isinstance(arg, dict) and "name" in arg]
+    arg_names = [
+        arg.get("name") for arg in arguments if isinstance(arg, dict) and "name" in arg
+    ]
     expected_args = ["topic", "start_time", "end_time"]
     for arg in expected_args:
-        assert arg in arg_names, f"Expected argument '{arg}' not found in metrics_analysis template"
+        assert (
+            arg in arg_names
+        ), f"Expected argument '{arg}' not found in metrics_analysis template"
 
     # Check template content
     tpl = metrics_template["template"]
