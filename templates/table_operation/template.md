@@ -22,7 +22,7 @@ GreptimeDB provides efficient tools for managing table data and distributed regi
 ## 2. Guidelines for Table Operations
 1. **Specify Table**: Always use table name (`{{ table }}`) in operations and queries.
 2. **Backup/Restore Commands**: Provide accurate file paths and formats to ensure compatibility.
-3. **Region Queries**: Use the `region_peers` schema for distribution and state monitoring.
+3. **Region Queries**: Use the `region_peers` table for distribution and state monitoring.
 4. **Metadata Tables**: Query metadata like `region_peers` or standard schema views (similar to MySQL's **information_schema**).
 5. **Time Range Filtering**: Backup and restoration commands can include time constraints using `START_TIME` and `END_TIME`.
 
