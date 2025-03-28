@@ -1,0 +1,14 @@
+description: "Table operations such as querying region metadata, backing up/restoring data for table in GreptimeDB."
+version: "1.0"
+arguments:
+  - name: "table"
+    description: "The table to operate on."
+    required: false
+metadata:
+  tags:
+    - operation
+    - backup
+    - restore
+    - metadata
+  suggested_use: "Used for table data backup and restore, or querying metadata information such as partitions, regions, etc."
+  output_format: "markdown"
