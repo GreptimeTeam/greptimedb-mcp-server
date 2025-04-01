@@ -1,5 +1,8 @@
 from greptimedb_mcp_server.config import Config
-from . import server
+import sys
+
+if not "-m" in sys.argv:
+    from . import server
 import asyncio
 
 
