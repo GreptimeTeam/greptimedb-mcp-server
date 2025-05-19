@@ -12,6 +12,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: 'pypi'
     steps:
       - uses: actions/checkout@v4
       - name: Install the latest version of uv
