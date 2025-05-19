@@ -1,0 +1,24 @@
+name: Publish Python Package
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v5
+    - name: Install dependencies
+      run: uv sync
+    - name: Build package and Publish
+      run: |
+        uv build
+        uv publish --token $PYPI_API_TOKEN
