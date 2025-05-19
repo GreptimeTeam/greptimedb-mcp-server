@@ -1,8 +1,8 @@
 # greptimedb-mcp-server
 
-![PyPI - Version](https://img.shields.io/pypi/v/greptimedb-mcp-server)
+[![PyPI - Version](https://img.shields.io/pypi/v/greptimedb-mcp-server)](https://pypi.org/project/greptimedb-mcp-server/)
 ![build workflow](https://github.com/GreptimeTeam/greptimedb-mcp-server/actions/workflows/python-app.yml/badge.svg)
-![MIT License](https://img.shields.io/badge/license-MIT-green)
+[![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
 A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
 
