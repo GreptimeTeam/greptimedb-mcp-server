@@ -25,7 +25,7 @@ Set the following environment variables:
 
 ```bash
 GREPTIMEDB_HOST=localhost    # Database host
-GREPTIMEDB_PORT=4002         # Optional: Database port (defaults to 4002 if not specified)
+GREPTIMEDB_PORT=4002         # Optional: Database MySQL port (defaults to 4002 if not specified)
 GREPTIMEDB_USER=root
 GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
@@ -33,11 +33,11 @@ GREPTIMEDB_DATABASE=public
 
 Or via command-line args:
 
-* `--host` the database host
-* `--port` the database port
-* `--user` the database username
-* `--password` the database password
-* `--database` the database name
+* `--host` the database host, `localhost` by default,
+* `--port` the database port, must be MySQL protocol port,  `4002` by default,
+* `--user` the database username, empty by default,
+* `--password` the database password, empty by default,
+* `--database` the database name, `public` by default.
 
 # Usage
 
