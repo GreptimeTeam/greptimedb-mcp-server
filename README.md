@@ -1,4 +1,9 @@
 # greptimedb-mcp-server
+
+![PyPI - Version](https://img.shields.io/pypi/v/greptimedb-mcp-server)
+![build workflow](https://github.com/GreptimeTeam/greptimedb-mcp-server/actions/workflows/python-app.yml/badge.svg)
+![MIT License](https://img.shields.io/badge/license-MIT-green)
+
 A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
 
 This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
