@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/greptimeteam-greptimedb-mcp-server-badge.png)](https://mseep.ai/app/greptimeteam-greptimedb-mcp-server)
+
 # greptimedb-mcp-server
 
 [![PyPI - Version](https://img.shields.io/pypi/v/greptimedb-mcp-server)](https://pypi.org/project/greptimedb-mcp-server/)
