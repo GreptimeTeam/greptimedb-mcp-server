@@ -8,6 +8,9 @@ A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://gi
 
 This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
 
+# Project Status
+This is an experimental project that is still under development. Data security and privacy issues have not been specifically addressed, so please use it with caution.
+
 # Capabilities
 
 * `list_resources` to list tables
