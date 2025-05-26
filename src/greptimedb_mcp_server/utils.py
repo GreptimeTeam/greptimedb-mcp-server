@@ -37,7 +37,7 @@ def security_gate(query: str) -> tuple[bool, str]:
 
 def templates_loader() -> dict[str, dict[str, str]]:
     templates = {}
-    template_dir = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
+    template_dir = os.path.join(os.path.dirname(__file__), "templates")
 
     for category in os.listdir(template_dir):
         category_path = os.path.join(template_dir, category)
