@@ -97,6 +97,7 @@ async def test_show_tables_query(logger, config):
     assert "users" in result[0].text
     assert "orders" in result[0].text
 
+
 @pytest.mark.asyncio
 async def test_show_dbs_query(logger, config):
     """Test SHOW TABLES query execution"""

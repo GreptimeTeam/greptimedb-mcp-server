@@ -127,7 +127,7 @@ def test_config_object_creation():
         database="manual_db",
         user="manual_user",
         password="manual_password",
-        time_zone="manual_timezone"
+        time_zone="manual_timezone",
     )
 
     assert config.host == "manual-host"
