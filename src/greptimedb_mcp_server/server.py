@@ -39,6 +39,7 @@ class DatabaseServer:
             "user": config.user,
             "password": config.password,
             "database": config.database,
+            "time_zone": config.time_zone,
         }
         self.templates = templates_loader()
 
@@ -207,13 +208,24 @@ class DatabaseServer:
 
                     stmt = query.strip().upper()
                     # Special handling for SHOW TABLES
+                    if stmt.startswith("SHOW DATABASES"):
+                        dbs = cursor.fetchall()
+                        result = ["Databases"]  # Header
+                        result.extend([db[0] for db in dbs])
+                        return [TextContent(type="text", text="\n".join(result))]
+                    # Special handling for SHOW TABLES
                     if stmt.startswith("SHOW TABLES"):
                         tables = cursor.fetchall()
                         result = ["Tables_in_" + config["database"]]  # Header
                         result.extend([table[0] for table in tables])
                         return [TextContent(type="text", text="\n".join(result))]
                     # Regular SELECT queries
-                    elif stmt.startswith("SELECT") or stmt.startswith("DESCRIBE"):
+                    elif (
+                        stmt.startswith("SELECT")
+                        or stmt.startswith("SHOW")
+                        or stmt.startswith("DESC")
+                        or stmt.startswith("TQL EVAL")
+                    ):
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
                         result = [",".join(map(str, row)) for row in rows]

@@ -34,6 +34,11 @@ class Config:
     GreptimeDB database name
     """
 
+    time_zone: str
+    """
+    GreptimeDB session time zone
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -76,6 +81,13 @@ class Config:
             default=os.getenv("GREPTIMEDB_PASSWORD", ""),
         )
 
+        parser.add_argument(
+            "--timezone",
+            type=str,
+            help="GreptimeDB session time zone",
+            default=os.getenv("GREPTIMEDB_TIMEZONE", ""),
+        )
+
         args = parser.parse_args()
         return Config(
             host=args.host,
@@ -83,4 +95,5 @@ class Config:
             database=args.database,
             user=args.user,
             password=args.password,
+            time_zone=args.timezone,
         )

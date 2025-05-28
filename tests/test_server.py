@@ -15,6 +15,7 @@ def config():
         user="testuser",
         password="testpassword",
         database="testdb",
+        time_zone="",
     )
 
 
@@ -95,6 +96,18 @@ async def test_show_tables_query(logger, config):
     assert "Tables_in_testdb" in result[0].text
     assert "users" in result[0].text
     assert "orders" in result[0].text
+
+@pytest.mark.asyncio
+async def test_show_dbs_query(logger, config):
+    """Test SHOW TABLES query execution"""
+    server = DatabaseServer(logger, config)
+    result = await server.call_tool("execute_sql", {"query": "SHOW DATABASES"})
+
+    # Verify the results
+    assert len(result) == 1
+    assert "Databases" in result[0].text
+    print(result[0].text)
+    assert "public" in result[0].text
 
 
 @pytest.mark.asyncio
