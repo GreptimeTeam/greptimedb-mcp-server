@@ -24,7 +24,7 @@ class MockCursor:
     def description(self):
         if "SHOW TABLES" in self.query.upper():
             return [("table_name", None)]
-        elif "SHOW TABLES" in self.query.upper():
+        elif "SHOW DATABASES" in self.query.upper():
             return [("Databases", None)]
         elif "SELECT" in self.query.upper():
             return [("id", None), ("name", None)]
