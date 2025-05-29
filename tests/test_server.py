@@ -100,7 +100,7 @@ async def test_show_tables_query(logger, config):
 
 @pytest.mark.asyncio
 async def test_show_dbs_query(logger, config):
-    """Test SHOW TABLES query execution"""
+    """Test SHOW DATABASES query execution"""
     server = DatabaseServer(logger, config)
     result = await server.call_tool("execute_sql", {"query": "SHOW DATABASES"})
 
