@@ -1,5 +1,5 @@
 import pytest
-from greptimedb_mcp_server.utils import templates_loader
+from greptimedb_mcp_server.utils import templates_loader, security_gate
 
 
 def test_templates_loader_basic():
@@ -47,3 +47,61 @@ def test_templates_loader_basic():
     assert "{{ topic }}" in tpl
     assert "{{ start_time }}" in tpl
     assert "{{ end_time }}" in tpl
+
+
+def test_empty_queries():
+    """Test empty queries"""
+    assert security_gate("") == (True, "Empty query not allowed")
+    assert security_gate("   ") == (True, "Empty query not allowed")
+    assert security_gate(None) == (True, "Empty query not allowed")
+
+
+def test_safe_queries():
+    """Test safe queries"""
+    assert security_gate("SELECT * FROM users") == (False, "")
+    assert security_gate("select id from products") == (False, "")
+
+
+def test_dangerous_operations():
+    """Test dangerous operations"""
+    assert security_gate("DROP TABLE users") == (True, "Forbided `DROP` operation")
+    assert security_gate("DELETE FROM users") == (True, "Forbided `DELETE` operation")
+    assert security_gate("UPDATE users SET name='test'") == (
+        True,
+        "Forbided `UPDATE` operation",
+    )
+    assert security_gate("INSERT INTO users VALUES (1)") == (
+        True,
+        "Forbided `INSERT` operation",
+    )
+
+
+def test_multiple_statements():
+    """Test multiple statements"""
+    assert security_gate("SELECT * FROM users; SELECT * FROM test") == (
+        True,
+        "Forbided multiple statements",
+    )
+
+
+def test_comment_bypass():
+    """Test comment bypass attempts"""
+    assert security_gate("DROP/**/TABLE users") == (True, "Forbided `DROP` operation")
+    assert security_gate("DROP--comment\nTABLE users") == (
+        True,
+        "Forbided `DROP` operation",
+    )
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("SELECT * FROM users", (False, "")),
+        ("DROP TABLE users", (True, "Forbided `DROP` operation")),
+        ("DELETE FROM users", (True, "Forbided `DELETE` operation")),
+        ("", (True, "Empty query not allowed")),
+    ],
+)
+def test_parametrized_queries(query, expected):
+    """Parametrized test for multiple queries"""
+    assert security_gate(query) == expected

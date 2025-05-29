@@ -45,8 +45,8 @@ async def test_read_resource(logger, config):
 
     # Verify the results contain expected data
     assert "id,name" in result
-    assert "1,John" in result
-    assert "2,Jane" in result
+    assert '1,"John"' in result
+    assert '2,"Jane"' in result
 
 
 @pytest.mark.asyncio

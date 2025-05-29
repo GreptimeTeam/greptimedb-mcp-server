@@ -8,7 +8,7 @@ class MockCursor:
         self.query = ""
         self.rowcount = 2
 
-    def execute(self, query):
+    def execute(self, query, args=None):
         self.query = query
 
     def fetchall(self):

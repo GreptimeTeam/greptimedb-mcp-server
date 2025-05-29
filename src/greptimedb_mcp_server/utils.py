@@ -8,28 +8,37 @@ logger = logging.getLogger("greptimedb_mcp_server")
 
 def security_gate(query: str) -> tuple[bool, str]:
     """
-    Check if a SQL query is dangerous and should be blocked.
-
+    Simple security check for SQL queries.
     Args:
         query: The SQL query to check
-
     Returns:
         tuple: A boolean indicating if the query is dangerous, and a reason message
     """
-    # format query to uppercase and remove leading/trailing whitespace
-    normalized_query = query.strip().upper()
+    if not query or not query.strip():
+        return True, "Empty query not allowed"
 
-    # Define dangerous patterns
+    # Remove comments and normalize whitespace
+    clean_query = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)  # Remove /* */
+    clean_query = re.sub(r"--.*", "", clean_query)  # Remove --
+    clean_query = re.sub(r"\s+", " ", clean_query).strip().upper()  # Normalize spaces
+
+    # Check for dangerous patterns
     dangerous_patterns = [
-        (r"\bDROP\s", "Forbided `DROP` operation"),
-        (r"\bDELETE\s", "Forbided `DELETE` operation"),
-        (r"\bREVOKE\s", "Forbided `REVOKE` operation"),
-        (r"\bTRUNCATE\s", "Forbided `bTRUNCATE` operation"),
+        (r"\bDROP\b", "Forbided `DROP` operation"),
+        (r"\bDELETE\b", "Forbided `DELETE` operation"),
+        (r"\bREVOKE\b", "Forbided `REVOKE` operation"),
+        (r"\bTRUNCATE\b", "Forbided `TRUNCATE` operation"),
+        (r"\bUPDATE\b", "Forbided `UPDATE` operation"),
+        (r"\bINSERT\b", "Forbided `INSERT` operation"),
+        (r"\bALTER\b", "Forbided `ALTER` operation"),
+        (r"\bCREATE\b", "Forbided `CREATE` operation"),
+        (r"\bGRANT\b", "Forbided `GRANT` operation"),
+        (r";\s*\w+", "Forbided multiple statements"),
     ]
 
     for pattern, reason in dangerous_patterns:
-        if re.search(pattern, normalized_query):
-            logger.warning(f"Detected dangerous operation: '{query}' - {reason}")
+        if re.search(pattern, clean_query):
+            logger.warning(f"Dangerous pattern detected: {query[:50]}...")
             return True, reason
 
     return False, ""
