@@ -37,6 +37,7 @@ GREPTIMEDB_PORT=4002         # Optional: Database MySQL port (defaults to 4002 i
 GREPTIMEDB_USER=root
 GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
+GREPTIMEDB_TIMEZONE=UTC
 ```
 
 Or via command-line args:
@@ -46,6 +47,7 @@ Or via command-line args:
 * `--user` the database username, empty by default,
 * `--password` the database password, empty by default,
 * `--database` the database name, `public` by default.
+* `--timezone` the session time zone, empty by default(using server default time zone).
 
 # Usage
 
@@ -79,7 +81,8 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
         "GREPTIMEDB_PORT": "4002",
         "GREPTIMEDB_USER": "root",
         "GREPTIMEDB_PASSWORD": "",
-        "GREPTIMEDB_DATABASE": "public"
+        "GREPTIMEDB_DATABASE": "public",
+        "GREPTIMEDB_TIMEZONE": ""
       }
     }
   }
