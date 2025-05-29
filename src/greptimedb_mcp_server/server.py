@@ -207,7 +207,7 @@ class DatabaseServer:
                     cursor.execute(query)
 
                     stmt = query.strip().upper()
-                    # Special handling for SHOW TABLES
+                    # Special handling for SHOW DATABASES
                     if stmt.startswith("SHOW DATABASES"):
                         dbs = cursor.fetchall()
                         result = ["Databases"]  # Header
