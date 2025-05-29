@@ -219,12 +219,10 @@ class DatabaseServer:
                         result = ["Tables_in_" + config["database"]]  # Header
                         result.extend([table[0] for table in tables])
                         return [TextContent(type="text", text="\n".join(result))]
-                    # Regular SELECT queries
-                    elif (
-                        stmt.startswith("SELECT")
-                        or stmt.startswith("SHOW")
-                        or stmt.startswith("DESC")
-                        or stmt.startswith("TQL EVAL")
+                    # Regular queries
+                    elif any(
+                        stmt.startswith(cmd)
+                        for cmd in ["SELECT", "SHOW", "DESC", "TQL", "EXPLAIN"]
                     ):
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
