@@ -14,6 +14,8 @@ class MockCursor:
     def fetchall(self):
         if "SHOW TABLES" in self.query.upper():
             return [("users",), ("orders",)]
+        elif "SHOW DATABASES" in self.query.upper():
+            return [("public",), ("greptime_private",)]
         elif "SELECT" in self.query.upper():
             return [(1, "John"), (2, "Jane")]
         return []
@@ -22,6 +24,8 @@ class MockCursor:
     def description(self):
         if "SHOW TABLES" in self.query.upper():
             return [("table_name", None)]
+        elif "SHOW DATABASES" in self.query.upper():
+            return [("Databases", None)]
         elif "SELECT" in self.query.upper():
             return [("id", None), ("name", None)]
         return []

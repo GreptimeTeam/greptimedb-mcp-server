@@ -16,6 +16,7 @@ def test_config_default_values():
             assert config.database == "public"
             assert config.user == ""
             assert config.password == ""
+            assert config.time_zone == ""
 
 
 def test_config_env_variables():
@@ -28,6 +29,7 @@ def test_config_env_variables():
         "GREPTIMEDB_DATABASE": "test_db",
         "GREPTIMEDB_USER": "test_user",
         "GREPTIMEDB_PASSWORD": "test_password",
+        "GREPTIMEDB_TIMEZONE": "test_tz",
     }
 
     with patch.dict(os.environ, env_vars):
@@ -39,6 +41,7 @@ def test_config_env_variables():
             assert config.database == "test_db"
             assert config.user == "test_user"
             assert config.password == "test_password"
+            assert config.time_zone == "test_tz"
 
 
 def test_config_cli_arguments():
@@ -57,6 +60,8 @@ def test_config_cli_arguments():
         "cli_user",
         "--password",
         "cli_password",
+        "--timezone",
+        "cli_tz",
     ]
 
     with patch.dict(os.environ, {}, clear=True):
@@ -68,6 +73,7 @@ def test_config_cli_arguments():
             assert config.database == "cli_db"
             assert config.user == "cli_user"
             assert config.password == "cli_password"
+            assert config.time_zone == "cli_tz"
 
 
 def test_config_precedence():
@@ -80,6 +86,7 @@ def test_config_precedence():
         "GREPTIMEDB_DATABASE": "env_db",
         "GREPTIMEDB_USER": "env_user",
         "GREPTIMEDB_PASSWORD": "env_password",
+        "GREPTIMEDB_TIMEZONE": "env_tz",
     }
 
     cli_args = [
@@ -94,6 +101,8 @@ def test_config_precedence():
         "cli_user",
         "--password",
         "cli_password",
+        "--timezone",
+        "cli_tz",
     ]
 
     with patch.dict(os.environ, env_vars):
@@ -105,6 +114,7 @@ def test_config_precedence():
             assert config.database == "cli_db"
             assert config.user == "cli_user"
             assert config.password == "cli_password"
+            assert config.time_zone == "cli_tz"
 
 
 def test_config_object_creation():
@@ -117,6 +127,7 @@ def test_config_object_creation():
         database="manual_db",
         user="manual_user",
         password="manual_password",
+        time_zone="manual_timezone",
     )
 
     assert config.host == "manual-host"
@@ -124,3 +135,4 @@ def test_config_object_creation():
     assert config.database == "manual_db"
     assert config.user == "manual_user"
     assert config.password == "manual_password"
+    assert config.time_zone == "manual_timezone"
