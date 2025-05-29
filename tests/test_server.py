@@ -109,6 +109,7 @@ async def test_show_dbs_query(logger, config):
     assert "Databases" in result[0].text
     print(result[0].text)
     assert "public" in result[0].text
+    assert "greptime_private" in result[0].text
 
 
 @pytest.mark.asyncio
