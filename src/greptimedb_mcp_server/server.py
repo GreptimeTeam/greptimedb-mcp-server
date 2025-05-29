@@ -30,7 +30,7 @@ logging.basicConfig(
 
 
 def format_value(value):
-    """Quote string and datetime values, leave numbers as-is"""
+    """Quote string and datetime values, leave others as-is"""
     if isinstance(value, (str, datetime.datetime, datetime.date, datetime.time)):
         return f'"{value}"'
     return str(value)
