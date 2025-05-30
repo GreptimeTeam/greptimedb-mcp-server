@@ -1,7 +1,9 @@
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server.utils import security_gate, templates_loader
 
+import datetime
 import asyncio
+import re
 import logging
 from logging import Logger
 from mysql.connector import connect, Error
@@ -25,6 +27,13 @@ RESULTS_LIMIT = 100
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+
+def format_value(value):
+    """Quote string and datetime values, leave others as-is"""
+    if isinstance(value, (str, datetime.datetime, datetime.date, datetime.time)):
+        return f'"{value}"'
+    return str(value)
 
 
 # The GreptimeDB MCP Server
@@ -93,14 +102,18 @@ class DatabaseServer:
 
         parts = uri_str[len(RES_PREFIX) :].split("/")
         table = parts[0]
+        if not re.match(r"^[a-zA-Z_:-][a-zA-Z0-9_:\-\.@#]*", table):
+            raise ValueError("Invalid table name")
 
         try:
             with connect(**config) as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute(f"SELECT * FROM {table} LIMIT {RESULTS_LIMIT}")
+                    cursor.execute(f"SELECT * FROM {table} LIMIT %s", (RESULTS_LIMIT,))
                     columns = [desc[0] for desc in cursor.description]
                     rows = cursor.fetchall()
-                    result = [",".join(map(str, row)) for row in rows]
+                    result = [
+                        ",".join(format_value(val) for val in row) for row in rows
+                    ]
             return "\n".join([",".join(columns)] + result)
 
         except Error as e:
