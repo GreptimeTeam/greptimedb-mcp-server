@@ -4,9 +4,13 @@
 ![build workflow](https://github.com/GreptimeTeam/greptimedb-mcp-server/actions/workflows/python-app.yml/badge.svg)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
-A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
+A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb-mcp).
 
 This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
+
+<a href="https://glama.ai/mcp/servers/@GreptimeTeam/greptimedb-mcp-server">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@GreptimeTeam/greptimedb-mcp-server/badge" alt="GreptimeDB Server MCP server" />
+</a>
 
 # Project Status
 This is an experimental project that is still under development. Data security and privacy issues have not been specifically addressed, so please use it with caution.
