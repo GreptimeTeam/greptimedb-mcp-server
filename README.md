@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/greptimeteam-greptimedb-mcp-server-badge.png)](https://mseep.ai/app/greptimeteam-greptimedb-mcp-server)
+
 # greptimedb-mcp-server
 A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
 
