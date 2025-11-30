@@ -285,7 +285,12 @@ async def health_check() -> str:
 
 @mcp.tool()
 async def execute_tql(
-    query: Annotated[str, "PromQL expression, e.g., rate(http_requests_total[5m])"],
+    query: Annotated[
+        str,
+        "PromQL-compatible expression. Supports standard PromQL syntax: "
+        "rate(), increase(), sum(), avg(), histogram_quantile(), etc. "
+        "Example: rate(http_requests_total[5m])",
+    ],
     start: Annotated[
         str, "Start time (RFC3339, Unix timestamp, or relative like 'now-1h')"
     ],
@@ -296,7 +301,7 @@ async def execute_tql(
         str, "Output format: csv, json, or markdown (default: json)"
     ] = "json",
 ) -> str:
-    """Execute TQL (PromQL-compatible) query for time-series analysis."""
+    """Execute TQL query for time-series analysis. TQL is PromQL-compatible - use standard PromQL syntax."""
     state = get_state()
 
     if not all([query, start, end, step]):
