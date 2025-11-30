@@ -17,12 +17,16 @@ def security_gate(query: str) -> tuple[bool, str]:
     if not query or not query.strip():
         return True, "Empty query not allowed"
 
-    # Remove comments and normalize whitespace
-    clean_query = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)  # Remove /* */
-    clean_query = re.sub(r"--.*", "", clean_query)  # Remove --
-    clean_query = re.sub(r"\s+", " ", clean_query).strip().upper()  # Normalize spaces
+    # Check for encoded content before normalization (hex encoding bypass)
+    if re.search(r"\b(?:UNHEX|0x[0-9a-fA-F]+|CHAR\s*\()", query, re.IGNORECASE):
+        logger.warning(f"Encoded content detected: {query[:50]}...")
+        return True, "Encoded query content not allowed"
 
-    # Check for dangerous patterns
+    # Remove comments and normalize whitespace
+    clean_query = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)
+    clean_query = re.sub(r"--.*", "", clean_query)
+    clean_query = re.sub(r"\s+", " ", clean_query).strip().upper()
+
     dangerous_patterns = [
         # DDL/DML operations
         (r"\bDROP\b", "Forbidden `DROP` operation"),
@@ -34,18 +38,21 @@ def security_gate(query: str) -> tuple[bool, str]:
         (r"\bALTER\b", "Forbidden `ALTER` operation"),
         (r"\bCREATE\b", "Forbidden `CREATE` operation"),
         (r"\bGRANT\b", "Forbidden `GRANT` operation"),
+        # Dynamic SQL execution
+        (r"\b(?:EXEC|EXECUTE)\b", "Dynamic SQL execution not allowed"),
+        (r"\bCALL\b", "Stored procedure calls not allowed"),
+        (r"\bREPLACE\s+INTO\b", "Forbidden `REPLACE INTO` operation"),
         # File system access
         (r"\bLOAD\b", "Forbidden `LOAD` operation"),
         (r"\bCOPY\b", "Forbidden `COPY` operation"),
         (r"\bOUTFILE\b", "Forbidden `OUTFILE` operation"),
         (r"\bLOAD_FILE\b", "Forbidden `LOAD_FILE` function"),
         (r"\bINTO\s+DUMPFILE\b", "Forbidden `INTO DUMPFILE` operation"),
-        # Data exfiltration
-        (r"\bUNION\b", "Forbidden `UNION` operation"),
-        # Schema enumeration
-        (r"\bINFORMATION_SCHEMA\b", "Forbidden `INFORMATION_SCHEMA` access"),
-        # Multiple statements
-        (r";\s*\w+", "Forbidden multiple statements"),
+        # Multiple statements (check for dangerous keywords after semicolon)
+        (
+            r";\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|GRANT|REVOKE|TRUNCATE)\b",
+            "Forbidden multiple statements",
+        ),
     ]
 
     for pattern, reason in dangerous_patterns:

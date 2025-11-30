@@ -2,7 +2,7 @@ import pytest
 import datetime
 import json
 from greptimedb_mcp_server.utils import templates_loader, security_gate
-from greptimedb_mcp_server.server import format_value, format_results
+from greptimedb_mcp_server.server import format_results
 
 
 def test_templates_loader_basic():
@@ -59,12 +59,6 @@ def test_empty_queries():
     assert security_gate(None) == (True, "Empty query not allowed")
 
 
-def test_safe_queries():
-    """Test safe queries"""
-    assert security_gate("SELECT * FROM users") == (False, "")
-    assert security_gate("select id from products") == (False, "")
-
-
 def test_dangerous_operations():
     """Test dangerous operations"""
     assert security_gate("DROP TABLE users") == (True, "Forbidden `DROP` operation")
@@ -80,11 +74,12 @@ def test_dangerous_operations():
 
 
 def test_multiple_statements():
-    """Test multiple statements"""
-    assert security_gate("SELECT * FROM users; SELECT * FROM test") == (
-        True,
-        "Forbidden multiple statements",
-    )
+    """Test multiple statements with dangerous operations"""
+    # Safe multiple SELECT statements are now allowed
+    assert security_gate("SELECT * FROM users; SELECT * FROM test") == (False, "")
+    # Dangerous multiple statements are blocked (DROP detected first)
+    result = security_gate("SELECT * FROM users; DROP TABLE test")
+    assert result[0] is True
 
 
 def test_comment_bypass():
@@ -108,48 +103,6 @@ def test_comment_bypass():
 def test_parametrized_queries(query, expected):
     """Parametrized test for multiple queries"""
     assert security_gate(query) == expected
-
-
-# ============================================================
-# format_value Tests
-# ============================================================
-
-
-def test_format_value_string():
-    """Test format_value with string input"""
-    assert format_value("hello") == '"hello"'
-
-
-def test_format_value_int():
-    """Test format_value with integer input"""
-    assert format_value(42) == "42"
-
-
-def test_format_value_float():
-    """Test format_value with float input"""
-    assert format_value(3.14) == "3.14"
-
-
-def test_format_value_datetime():
-    """Test format_value with datetime input"""
-    dt = datetime.datetime(2024, 1, 1, 12, 0, 0)
-    assert format_value(dt) == '"2024-01-01 12:00:00"'
-
-
-def test_format_value_date():
-    """Test format_value with date input"""
-    d = datetime.date(2024, 1, 1)
-    assert format_value(d) == '"2024-01-01"'
-
-
-def test_format_value_none():
-    """Test format_value with None input"""
-    assert format_value(None) == "None"
-
-
-# ============================================================
-# format_results Tests
-# ============================================================
 
 
 def test_format_results_csv():
@@ -206,9 +159,23 @@ def test_format_results_default_csv():
     assert "1" in result
 
 
-# ============================================================
-# Security Gate Extension Tests
-# ============================================================
+def test_format_results_csv_quotes_special_chars():
+    """Test format_results CSV properly quotes values with special characters"""
+    result = format_results(
+        ["name", "desc"], [("hello", "has,comma"), ("world", 'has"quote')], "csv"
+    )
+    assert "name,desc" in result
+    assert "hello" in result
+    assert '"has,comma"' in result  # comma values get quoted
+    assert '"has""quote"' in result  # quotes get escaped and value quoted
+
+
+def test_format_results_markdown_escapes_pipe():
+    """Test format_results markdown format escapes pipe characters"""
+    result = format_results(["col|name", "value"], [("a|b", "c|d")], "markdown")
+    assert r"col\|name" in result
+    assert r"a\|b" in result
+    assert r"c\|d" in result
 
 
 def test_security_gate_alter():
@@ -266,11 +233,6 @@ def test_security_gate_desc():
     assert result[0] is False
 
 
-# ============================================================
-# New Security Gate Tests (File System & Data Exfiltration)
-# ============================================================
-
-
 def test_security_gate_load():
     """Test security gate blocks LOAD operations"""
     result = security_gate("LOAD DATA INFILE '/etc/passwd' INTO TABLE users")
@@ -300,17 +262,15 @@ def test_security_gate_load_file():
 
 
 def test_security_gate_union():
-    """Test security gate blocks UNION operations"""
+    """Test security gate allows UNION operations"""
     result = security_gate("SELECT * FROM users UNION SELECT * FROM admins")
-    assert result[0] is True
-    assert "UNION" in result[1]
+    assert result[0] is False
 
 
 def test_security_gate_information_schema():
-    """Test security gate blocks INFORMATION_SCHEMA access"""
+    """Test security gate allows INFORMATION_SCHEMA access"""
     result = security_gate("SELECT * FROM INFORMATION_SCHEMA.TABLES")
-    assert result[0] is True
-    assert "INFORMATION_SCHEMA" in result[1]
+    assert result[0] is False
 
 
 def test_security_gate_dumpfile():

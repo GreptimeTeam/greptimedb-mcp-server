@@ -1,15 +1,27 @@
 import pytest
-import logging
+import json
 
-# Now we can safely import these
-from greptimedb_mcp_server.server import DatabaseServer
 from greptimedb_mcp_server.config import Config
+from greptimedb_mcp_server import server
+from greptimedb_mcp_server.server import (
+    AppState,
+    execute_sql,
+    describe_table,
+    health_check,
+    execute_tql,
+    query_range,
+    explain_query,
+    read_table_resource,
+    format_results,
+    mcp,
+)
+from greptimedb_mcp_server.utils import templates_loader
 
 
-@pytest.fixture
-def config():
-    """Create a test configuration"""
-    return Config(
+@pytest.fixture(autouse=True)
+def setup_state():
+    """Initialize application state for tests."""
+    config = Config(
         host="localhost",
         port=4002,
         user="testuser",
@@ -17,238 +29,156 @@ def config():
         database="testdb",
         time_zone="",
     )
+    db_config = {
+        "host": config.host,
+        "port": config.port,
+        "user": config.user,
+        "password": config.password,
+        "database": config.database,
+        "time_zone": config.time_zone,
+    }
+    pool_config = {
+        "pool_name": "greptimedb_pool",
+        "pool_size": 5,
+        "pool_reset_session": True,
+        **db_config,
+    }
 
+    server._state = AppState(
+        db_config=db_config,
+        pool_config=pool_config,
+        templates=templates_loader(),
+    )
 
-@pytest.fixture
-def logger():
-    """Create a test logger"""
-    return logging.getLogger("test_logger")
+    yield
+
+    server._state = None
 
 
 @pytest.mark.asyncio
-async def test_list_resources(logger, config):
-    """Test listing database resources"""
-    server = DatabaseServer(logger, config)
-    resources = await server.list_resources()
+async def test_execute_sql_select():
+    """Test executing a SELECT query"""
+    result = await execute_sql(query="SELECT * FROM users")
 
-    # Verify the results
-    assert len(resources) == 2
-    assert resources[0].name == "Table: users"
-    assert str(resources[0].uri) == "greptime://users/data"
-
-
-@pytest.mark.asyncio
-async def test_read_resource(logger, config):
-    """Test reading a specific database resource"""
-    server = DatabaseServer(logger, config)
-    result = await server.read_resource("greptime://users/data")
-
-    # Verify the results contain expected data
     assert "id,name" in result
-    assert '1,"John"' in result
-    assert '2,"Jane"' in result
+    assert "1," in result
+    assert "John" in result
 
 
 @pytest.mark.asyncio
-async def test_list_tools(logger, config):
-    """Test listing available database tools"""
-    server = DatabaseServer(logger, config)
-    tools = await server.list_tools()
-
-    # Verify the tool list (6 tools total)
-    assert len(tools) == 6
-    tool_names = [t.name for t in tools]
-    assert "execute_sql" in tool_names
-    assert "describe_table" in tool_names
-    assert "health_check" in tool_names
-    assert "execute_tql" in tool_names
-    assert "query_range" in tool_names
-    assert "explain_query" in tool_names
-
-    # Check execute_sql has new parameters
-    execute_sql = next(t for t in tools if t.name == "execute_sql")
-    assert "query" in execute_sql.inputSchema["properties"]
-    assert "format" in execute_sql.inputSchema["properties"]
-    assert "limit" in execute_sql.inputSchema["properties"]
-
-
-@pytest.mark.asyncio
-async def test_call_tool_select_query(logger, config):
-    """Test executing a SELECT query via tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("execute_sql", {"query": "SELECT * FROM users"})
-
-    # Verify the results
-    assert len(result) == 1
-    assert "id,name" in result[0].text
-    assert "1," in result[0].text
-    assert "John" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_security_gate_dangerous_query(logger, config):
+async def test_execute_sql_dangerous_blocked():
     """Test security gate blocking dangerous queries"""
-    server = DatabaseServer(logger, config)
+    result = await execute_sql(query="DROP TABLE users")
 
-    result = await server.call_tool("execute_sql", {"query": "DROP TABLE users"})
-
-    assert "Error: Dangerous operation blocked" in result[0].text
-    assert "Forbidden `DROP` operation" in result[0].text
+    assert "Error: Dangerous operation blocked" in result
+    assert "Forbidden `DROP` operation" in result
 
 
 @pytest.mark.asyncio
-async def test_show_tables_query(logger, config):
+async def test_execute_sql_show_tables():
     """Test SHOW TABLES query execution"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("execute_sql", {"query": "SHOW TABLES"})
+    result = await execute_sql(query="SHOW TABLES")
 
-    # Verify the results
-    assert len(result) == 1
-    assert "Tables_in_testdb" in result[0].text
-    assert "users" in result[0].text
-    assert "orders" in result[0].text
+    assert "Tables_in_testdb" in result
+    assert "users" in result
+    assert "orders" in result
 
 
 @pytest.mark.asyncio
-async def test_show_dbs_query(logger, config):
+async def test_execute_sql_show_databases():
     """Test SHOW DATABASES query execution"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("execute_sql", {"query": "SHOW DATABASES"})
+    result = await execute_sql(query="SHOW DATABASES")
 
-    # Verify the results
-    assert len(result) == 1
-    assert "Databases" in result[0].text
-    print(result[0].text)
-    assert "public" in result[0].text
-    assert "greptime_private" in result[0].text
+    assert "Databases" in result
+    assert "public" in result
+    assert "greptime_private" in result
 
 
 @pytest.mark.asyncio
-async def test_list_prompts(logger, config):
-    """Test listing available prompts"""
-    server = DatabaseServer(logger, config)
-    prompts = await server.list_prompts()
+async def test_execute_sql_json_format():
+    """Test execute_sql with JSON format"""
+    result = await execute_sql(query="SELECT * FROM users", format="json")
 
-    # Verify the results
-    assert len(prompts) > 0
-    # Check that each prompt has the expected properties
-    for prompt in prompts:
-        assert hasattr(prompt, "name")
-        assert hasattr(prompt, "description")
-        assert hasattr(prompt, "arguments")
+    data = json.loads(result)
+    assert "data" in data
+    assert "row_count" in data
+    assert "execution_time_ms" in data
+    assert len(data["data"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_get_prompt_without_args(logger, config):
-    """Test getting a prompt without arguments"""
-    server = DatabaseServer(logger, config)
-    # Get the first prompt from the list to test with
-    prompts = await server.list_prompts()
-    if not prompts:
-        pytest.skip("No prompts available for testing")
+async def test_execute_sql_markdown_format():
+    """Test execute_sql with markdown format"""
+    result = await execute_sql(query="SELECT * FROM users", format="markdown")
 
-    test_prompt_name = prompts[0].name
-    result = await server.get_prompt(test_prompt_name, {})
-
-    # Verify the result has the expected structure
-    assert hasattr(result, "messages")
-    assert len(result.messages) > 0
-    for message in result.messages:
-        assert hasattr(message, "role")
-        assert hasattr(message, "content")
+    assert "|" in result
+    assert "id" in result
+    assert "name" in result
+    assert "---" in result
 
 
 @pytest.mark.asyncio
-async def test_get_prompt_with_args(logger, config):
-    """Test getting a prompt with argument substitution"""
-    server = DatabaseServer(logger, config)
-    # Assume there's a prompt with arguments
-    prompts = await server.list_prompts()
-    prompt_with_args = None
-
-    # Find a prompt that has arguments
-    for prompt in prompts:
-        if prompt.arguments and len(prompt.arguments) > 0:
-            prompt_with_args = prompt
-            break
-
-    if not prompt_with_args:
-        pytest.skip("No prompts with arguments available for testing")
-
-    # Create args dictionary with test values for each required argument
-    args = {}
-    for arg in prompt_with_args.arguments:
-        args[arg.name] = f"test_{arg.name}"
-
-    result = await server.get_prompt(prompt_with_args.name, args)
-
-    # Verify result structure and argument substitution
-    assert hasattr(result, "messages")
-    assert len(result.messages) > 0
-
-    # Check that at least one message contains our test values
-    substitution_found = False
-    for message in result.messages:
-        for arg_name, arg_value in args.items():
-            if arg_value in message.content.text:
-                substitution_found = True
-                break
-        if substitution_found:
-            break
-
-    assert substitution_found, "Argument substitution not found in prompt messages"
-
-
-@pytest.mark.asyncio
-async def test_get_prompt_nonexistent(logger, config):
-    """Test getting a non-existent prompt"""
-    server = DatabaseServer(logger, config)
-
-    # Try to get a prompt that doesn't exist
+async def test_execute_sql_missing_query():
+    """Test execute_sql with missing query parameter"""
     with pytest.raises(ValueError) as excinfo:
-        await server.get_prompt("non_existent_prompt", {})
-
-    # Verify the error message
-    assert "Unknown template: non_existent_prompt" in str(excinfo.value)
-
-
-def test_server_initialization(logger, config):
-    """Test server initialization with configuration"""
-    server = DatabaseServer(logger, config)
-
-    # Verify the server was initialized correctly
-    assert server.logger == logger
-    assert server.db_config["host"] == "localhost"
-    assert server.db_config["port"] == 4002
-    assert server.db_config["user"] == "testuser"
-    assert server.db_config["password"] == "testpassword"
-    assert server.db_config["database"] == "testdb"
+        await execute_sql(query="")
+    assert "Query is required" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_describe_table(logger, config):
+async def test_execute_sql_invalid_format():
+    """Test execute_sql with invalid format parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await execute_sql(query="SELECT 1", format="xml")
+    assert "Invalid format" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_with_limit():
+    """Test execute_sql with limit parameter"""
+    result = await execute_sql(query="SELECT * FROM users", limit=1)
+    assert "id" in result or "name" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_union_allowed():
+    """Test execute_sql allows UNION queries"""
+    result = await execute_sql(query="SELECT * FROM users UNION SELECT * FROM admins")
+    assert "id" in result or "name" in result
+
+
+@pytest.mark.asyncio
+async def test_describe_table():
     """Test describe_table tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("describe_table", {"table": "users"})
+    result = await describe_table(table="users")
 
-    # Verify markdown output
-    assert len(result) == 1
-    assert "Column" in result[0].text
-    assert "Type" in result[0].text
-    assert "|" in result[0].text  # Markdown table
+    assert "Column" in result
+    assert "Type" in result
+    assert "|" in result
 
 
 @pytest.mark.asyncio
-async def test_health_check(logger, config):
+async def test_describe_table_invalid_name():
+    """Test describe_table with invalid table name"""
+    with pytest.raises(ValueError) as excinfo:
+        await describe_table(table="123invalid")
+    assert "Invalid table name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_describe_table_missing_table():
+    """Test describe_table with missing table parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await describe_table(table="")
+    assert "Table name is required" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_health_check():
     """Test health_check tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("health_check", {})
+    result = await health_check()
 
-    # Verify JSON output
-    assert len(result) == 1
-    import json
-
-    health = json.loads(result[0].text)
+    health = json.loads(result)
     assert health["status"] == "healthy"
     assert health["host"] == "localhost"
     assert health["port"] == 4002
@@ -257,57 +187,16 @@ async def test_health_check(logger, config):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_json_format(logger, config):
-    """Test execute_sql with JSON format"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql", {"query": "SELECT * FROM users", "format": "json"}
-    )
-
-    assert len(result) == 1
-    import json
-
-    data = json.loads(result[0].text)
-    assert "data" in data
-    assert "row_count" in data
-    assert "execution_time_ms" in data
-    assert len(data["data"]) == 2
-
-
-@pytest.mark.asyncio
-async def test_execute_sql_markdown_format(logger, config):
-    """Test execute_sql with markdown format"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql", {"query": "SELECT * FROM users", "format": "markdown"}
-    )
-
-    assert len(result) == 1
-    # Check markdown table format
-    assert "|" in result[0].text
-    assert "id" in result[0].text
-    assert "name" in result[0].text
-    assert "---" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_execute_tql(logger, config):
+async def test_execute_tql():
     """Test execute_tql tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_tql",
-        {
-            "query": "rate(http_requests_total[5m])",
-            "start": "2024-01-01T00:00:00Z",
-            "end": "2024-01-01T01:00:00Z",
-            "step": "1m",
-        },
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
     )
 
-    assert len(result) == 1
-    import json
-
-    data = json.loads(result[0].text)
+    data = json.loads(result)
     assert "tql" in data
     assert "data" in data
     assert "row_count" in data
@@ -315,325 +204,226 @@ async def test_execute_tql(logger, config):
 
 
 @pytest.mark.asyncio
-async def test_query_range(logger, config):
-    """Test query_range tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "query_range",
-        {
-            "table": "metrics",
-            "select": "ts, host, avg(cpu) RANGE '5m'",
-            "align": "1m",
-            "by": "host",
-        },
+async def test_execute_tql_with_lookback():
+    """Test execute_tql with optional lookback parameter"""
+    result = await execute_tql(
+        query="rate(x[5m])",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+        lookback="5m",
     )
 
-    assert len(result) == 1
-    import json
+    data = json.loads(result)
+    assert "tql" in data
+    assert "5m" in data["tql"]
 
-    data = json.loads(result[0].text)
+
+@pytest.mark.asyncio
+async def test_execute_tql_missing_params():
+    """Test execute_tql with missing required parameters"""
+    with pytest.raises(ValueError) as excinfo:
+        await execute_tql(query="rate(x[5m])", start="", end="", step="")
+    assert "required" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_injection_blocked():
+    """Test execute_tql blocks injection in parameters"""
+    with pytest.raises(ValueError) as excinfo:
+        await execute_tql(
+            query="rate(x[5m])",
+            start="2024-01-01'; DROP TABLE users; --",
+            end="2024-01-01T01:00:00Z",
+            step="1m",
+        )
+    assert "Invalid characters" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_dangerous_query_blocked():
+    """Test execute_tql blocks dangerous patterns in query"""
+    result = await execute_tql(
+        query="rate(x[5m]); DROP TABLE users",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+    )
+    assert "Error: Dangerous operation blocked" in result
+
+
+@pytest.mark.asyncio
+async def test_query_range():
+    """Test query_range tool"""
+    result = await query_range(
+        table="metrics",
+        select="ts, host, avg(cpu) RANGE '5m'",
+        align="1m",
+        by="host",
+    )
+
+    data = json.loads(result)
     assert "query" in data
     assert "data" in data
     assert "ALIGN" in data["query"]
 
 
 @pytest.mark.asyncio
-async def test_explain_query(logger, config):
-    """Test explain_query tool"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("explain_query", {"query": "SELECT * FROM users"})
-
-    assert len(result) == 1
-    # Check markdown table format
-    assert "plan" in result[0].text
-    assert "|" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_list_tools_count(logger, config):
-    """Test that all tools are listed"""
-    server = DatabaseServer(logger, config)
-    tools = await server.list_tools()
-
-    # Should have 6 tools now
-    assert len(tools) == 6
-    tool_names = [t.name for t in tools]
-    assert "execute_sql" in tool_names
-    assert "describe_table" in tool_names
-    assert "health_check" in tool_names
-    assert "execute_tql" in tool_names
-    assert "query_range" in tool_names
-    assert "explain_query" in tool_names
-
-
-# ============================================================
-# Tool Parameter Validation Tests
-# ============================================================
-
-
-@pytest.mark.asyncio
-async def test_describe_table_invalid_name(logger, config):
-    """Test describe_table with invalid table name"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("describe_table", {"table": "123invalid"})
-    assert "Invalid table name" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_describe_table_missing_table(logger, config):
-    """Test describe_table with missing table parameter"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("describe_table", {})
-    assert "Table name is required" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_execute_tql_missing_params(logger, config):
-    """Test execute_tql with missing required parameters"""
-    server = DatabaseServer(logger, config)
-    # Missing start, end, step
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("execute_tql", {"query": "rate(x[5m])"})
-    assert "required" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_query_range_invalid_table(logger, config):
-    """Test query_range with invalid table name"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool(
-            "query_range", {"table": "123-bad", "select": "ts, avg(cpu)", "align": "1m"}
-        )
-    assert "Invalid table name" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_query_range_missing_params(logger, config):
-    """Test query_range with missing required parameters"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("query_range", {"table": "metrics"})
-    assert "required" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_explain_query_missing_query(logger, config):
-    """Test explain_query with missing query parameter"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("explain_query", {})
-    assert "query is required" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_execute_sql_missing_query(logger, config):
-    """Test execute_sql with missing query parameter"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("execute_sql", {})
-    assert "Query is required" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_call_unknown_tool(logger, config):
-    """Test calling an unknown tool"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("nonexistent_tool", {})
-    assert "Unknown tool" in str(excinfo.value)
-
-
-# ============================================================
-# Optional Parameter Tests
-# ============================================================
-
-
-@pytest.mark.asyncio
-async def test_execute_tql_with_lookback(logger, config):
-    """Test execute_tql with optional lookback parameter"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_tql",
-        {
-            "query": "rate(x[5m])",
-            "start": "2024-01-01T00:00:00Z",
-            "end": "2024-01-01T01:00:00Z",
-            "step": "1m",
-            "lookback": "5m",
-        },
-    )
-    assert len(result) == 1
-    import json
-
-    data = json.loads(result[0].text)
-    assert "tql" in data
-    assert "lookback" in data["tql"] or "'5m'" in data["tql"]
-
-
-@pytest.mark.asyncio
-async def test_execute_sql_with_limit(logger, config):
-    """Test execute_sql with limit parameter"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql", {"query": "SELECT * FROM users", "limit": 1}
-    )
-    assert len(result) == 1
-    # Should still return data
-    assert "id" in result[0].text or "name" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_query_range_with_where(logger, config):
+async def test_query_range_with_where():
     """Test query_range with where condition"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "query_range",
-        {
-            "table": "metrics",
-            "select": "ts, avg(cpu)",
-            "align": "1m",
-            "where": "host = 'server1'",
-        },
+    result = await query_range(
+        table="metrics",
+        select="ts, avg(cpu)",
+        align="1m",
+        where="host = 'server1'",
     )
-    assert len(result) == 1
-    import json
 
-    data = json.loads(result[0].text)
+    data = json.loads(result)
     assert "query" in data
     assert "WHERE" in data["query"]
 
 
 @pytest.mark.asyncio
-async def test_query_range_with_fill(logger, config):
-    """Test query_range with fill parameter"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "query_range",
-        {"table": "metrics", "select": "ts, avg(cpu)", "align": "1m", "by": "host"},
+async def test_query_range_with_by():
+    """Test query_range with BY clause"""
+    result = await query_range(
+        table="metrics", select="ts, avg(cpu)", align="1m", by="host"
     )
-    assert len(result) == 1
-    import json
 
-    data = json.loads(result[0].text)
+    data = json.loads(result)
     assert "query" in data
     assert "BY" in data["query"]
 
 
 @pytest.mark.asyncio
-async def test_explain_query_with_analyze(logger, config):
-    """Test explain_query with analyze=true"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "explain_query", {"query": "SELECT * FROM users", "analyze": True}
-    )
-    assert len(result) == 1
-    # Should return plan info
-    assert "plan" in result[0].text or "|" in result[0].text
-
-
-# ============================================================
-# Resource Error Handling Tests
-# ============================================================
-
-
-@pytest.mark.asyncio
-async def test_read_resource_invalid_scheme(logger, config):
-    """Test read_resource with invalid URI scheme"""
-    server = DatabaseServer(logger, config)
+async def test_query_range_invalid_table():
+    """Test query_range with invalid table name"""
     with pytest.raises(ValueError) as excinfo:
-        await server.read_resource("invalid://users/data")
-    assert "Invalid URI scheme" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_read_resource_invalid_table_name(logger, config):
-    """Test read_resource with invalid table name in URI"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.read_resource("greptime://123invalid/data")
+        await query_range(table="123-bad", select="ts, avg(cpu)", align="1m")
     assert "Invalid table name" in str(excinfo.value)
 
 
-# ============================================================
-# Security Enhancement Tests
-# ============================================================
-
-
 @pytest.mark.asyncio
-async def test_execute_sql_invalid_format(logger, config):
-    """Test execute_sql with invalid format parameter"""
-    server = DatabaseServer(logger, config)
+async def test_query_range_missing_params():
+    """Test query_range with missing required parameters"""
     with pytest.raises(ValueError) as excinfo:
-        await server.call_tool("execute_sql", {"query": "SELECT 1", "format": "xml"})
-    assert "Invalid format" in str(excinfo.value)
+        await query_range(table="metrics", select="", align="")
+    assert "required" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_union_blocked(logger, config):
-    """Test execute_sql blocks UNION queries"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_sql", {"query": "SELECT * FROM users UNION SELECT * FROM admins"}
-    )
-    assert "UNION" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_execute_tql_injection_blocked(logger, config):
-    """Test execute_tql blocks injection in parameters"""
-    server = DatabaseServer(logger, config)
-    with pytest.raises(ValueError) as excinfo:
-        await server.call_tool(
-            "execute_tql",
-            {
-                "query": "rate(x[5m])",
-                "start": "2024-01-01'; DROP TABLE users; --",
-                "end": "2024-01-01T01:00:00Z",
-                "step": "1m",
-            },
-        )
-    assert "Invalid characters" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_execute_tql_dangerous_query_blocked(logger, config):
-    """Test execute_tql blocks dangerous patterns in query"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool(
-        "execute_tql",
-        {
-            "query": "rate(x[5m]) UNION SELECT * FROM users",
-            "start": "2024-01-01T00:00:00Z",
-            "end": "2024-01-01T01:00:00Z",
-            "step": "1m",
-        },
-    )
-    assert "Error: Dangerous operation blocked" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_query_range_injection_blocked(logger, config):
+async def test_query_range_injection_blocked():
     """Test query_range blocks injection in where clause"""
-    server = DatabaseServer(logger, config)
     with pytest.raises(ValueError) as excinfo:
-        await server.call_tool(
-            "query_range",
-            {
-                "table": "metrics",
-                "select": "ts, avg(cpu)",
-                "align": "1m",
-                "where": "1=1; DROP TABLE users; --",
-            },
+        await query_range(
+            table="metrics",
+            select="ts, avg(cpu)",
+            align="1m",
+            where="1=1; DROP TABLE users; --",
         )
     assert "Dangerous pattern" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_explain_query_dangerous_blocked(logger, config):
+async def test_query_range_align_injection_blocked():
+    """Test query_range blocks injection in align parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await query_range(
+            table="metrics",
+            select="ts, avg(cpu)",
+            align="1m' OR '1'='1",
+        )
+    assert "Invalid align" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_query_range_invalid_align():
+    """Test query_range rejects invalid duration format"""
+    with pytest.raises(ValueError) as excinfo:
+        await query_range(
+            table="metrics",
+            select="ts, avg(cpu)",
+            align="invalid",
+        )
+    assert "Invalid align" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_query_range_fill_injection_blocked():
+    """Test query_range blocks injection in fill parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await query_range(
+            table="metrics",
+            select="ts, avg(cpu)",
+            align="1m",
+            fill="NULL; DROP TABLE users; --",
+        )
+    assert "Invalid fill" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_query_range_valid_fill():
+    """Test query_range accepts valid fill values"""
+    # Test NULL
+    result = await query_range(
+        table="metrics", select="ts, avg(cpu)", align="1m", fill="NULL"
+    )
+    data = json.loads(result)
+    assert "FILL NULL" in data["query"]
+
+    # Test numeric
+    result = await query_range(
+        table="metrics", select="ts, avg(cpu)", align="1m", fill="0"
+    )
+    data = json.loads(result)
+    assert "FILL 0" in data["query"]
+
+
+@pytest.mark.asyncio
+async def test_explain_query():
+    """Test explain_query tool"""
+    result = await explain_query(query="SELECT * FROM users")
+
+    assert "plan" in result
+    assert "|" in result
+
+
+@pytest.mark.asyncio
+async def test_explain_query_with_analyze():
+    """Test explain_query with analyze=true"""
+    result = await explain_query(query="SELECT * FROM users", analyze=True)
+
+    assert "plan" in result or "|" in result
+
+
+@pytest.mark.asyncio
+async def test_explain_query_missing_query():
+    """Test explain_query with missing query parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await explain_query(query="")
+    assert "query is required" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_explain_query_dangerous_blocked():
     """Test explain_query blocks dangerous queries"""
-    server = DatabaseServer(logger, config)
-    result = await server.call_tool("explain_query", {"query": "DROP TABLE users"})
-    assert "Error: Dangerous operation blocked" in result[0].text
+    result = await explain_query(query="DROP TABLE users")
+    assert "Error: Dangerous operation blocked" in result
+
+
+@pytest.mark.asyncio
+async def test_read_table_resource():
+    """Test reading a table resource"""
+    result = await read_table_resource(table="users")
+
+    assert "id,name" in result
+    assert "1,John" in result
+    assert "2,Jane" in result
+
+
+@pytest.mark.asyncio
+async def test_read_table_resource_invalid_name():
+    """Test read_table_resource with invalid table name"""
+    with pytest.raises(ValueError) as excinfo:
+        await read_table_resource(table="123invalid")
+    assert "Invalid table name" in str(excinfo.value)

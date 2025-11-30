@@ -34,9 +34,10 @@ This is an experimental project that is still under development. Data security a
 
 ## Security
 All queries pass through a security gate that:
-- Blocks dangerous operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
+- Blocks DDL/DML operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
+- Blocks file system access: LOAD, COPY, OUTFILE, LOAD_FILE, INTO DUMPFILE
 - Prevents multiple statement execution
-- Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN
+- Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION, INFORMATION_SCHEMA
 
 ## Performance
 - Connection pooling for efficient database access

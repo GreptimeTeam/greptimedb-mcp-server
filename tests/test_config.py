@@ -115,24 +115,3 @@ def test_config_precedence():
             assert config.user == "cli_user"
             assert config.password == "cli_password"
             assert config.time_zone == "cli_tz"
-
-
-def test_config_object_creation():
-    """
-    Test direct creation of Config object
-    """
-    config = Config(
-        host="manual-host",
-        port=1234,
-        database="manual_db",
-        user="manual_user",
-        password="manual_password",
-        time_zone="manual_timezone",
-    )
-
-    assert config.host == "manual-host"
-    assert config.port == 1234
-    assert config.database == "manual_db"
-    assert config.user == "manual_user"
-    assert config.password == "manual_password"
-    assert config.time_zone == "manual_timezone"
