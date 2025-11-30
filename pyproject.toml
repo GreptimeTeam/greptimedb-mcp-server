@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "greptimedb-mcp-server"
-version = "0.2.2"
-description = "A Model Context Protocol (MCP) server that enables secure interaction with GreptimeDB databases. This server allows AI assistants to list tables, read data, and execute SQL queries through a controlled interface, making database exploration and analysis safer and more structured."
+version = "0.3.0"
+description = "MCP server for GreptimeDB with SQL/TQL/PromQL support, sensitive data masking, and prompt templates for observability data analysis."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

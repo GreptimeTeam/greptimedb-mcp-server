@@ -4,12 +4,9 @@
 ![build workflow](https://github.com/GreptimeTeam/greptimedb-mcp-server/actions/workflows/python-app.yml/badge.svg)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
-A Model Context Protocol (MCP) server implementation for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb).
+A Model Context Protocol (MCP) server for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) — an open-source, cloud-native, unified observability database.
 
-This server provides AI assistants with a secure and structured way to explore and analyze databases. It enables them to list tables, read data, and execute SQL queries through a controlled interface, ensuring responsible database access.
-
-# Project Status
-This is an experimental project that is still under development. Data security and privacy issues have not been specifically addressed, so please use it with caution.
+This server enables AI assistants to query and analyze GreptimeDB through SQL, TQL (PromQL-compatible), and RANGE queries. It includes security features like read-only enforcement and sensitive data masking, along with prompt templates for common analysis tasks.
 
 # Features
 
@@ -60,10 +57,6 @@ GREPTIMEDB_MASK_PATTERNS=phone,address,email
 ```
 
 Masked values appear as `******` in all output formats (CSV, JSON, Markdown).
-
-## Performance
-- Connection pooling for efficient database access
-- Async operations for non-blocking execution
 
 # Installation
 
