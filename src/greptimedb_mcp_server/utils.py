@@ -24,16 +24,16 @@ def security_gate(query: str) -> tuple[bool, str]:
 
     # Check for dangerous patterns
     dangerous_patterns = [
-        (r"\bDROP\b", "Forbided `DROP` operation"),
-        (r"\bDELETE\b", "Forbided `DELETE` operation"),
-        (r"\bREVOKE\b", "Forbided `REVOKE` operation"),
-        (r"\bTRUNCATE\b", "Forbided `TRUNCATE` operation"),
-        (r"\bUPDATE\b", "Forbided `UPDATE` operation"),
-        (r"\bINSERT\b", "Forbided `INSERT` operation"),
-        (r"\bALTER\b", "Forbided `ALTER` operation"),
-        (r"\bCREATE\b", "Forbided `CREATE` operation"),
-        (r"\bGRANT\b", "Forbided `GRANT` operation"),
-        (r";\s*\w+", "Forbided multiple statements"),
+        (r"\bDROP\b", "Forbidden `DROP` operation"),
+        (r"\bDELETE\b", "Forbidden `DELETE` operation"),
+        (r"\bREVOKE\b", "Forbidden `REVOKE` operation"),
+        (r"\bTRUNCATE\b", "Forbidden `TRUNCATE` operation"),
+        (r"\bUPDATE\b", "Forbidden `UPDATE` operation"),
+        (r"\bINSERT\b", "Forbidden `INSERT` operation"),
+        (r"\bALTER\b", "Forbidden `ALTER` operation"),
+        (r"\bCREATE\b", "Forbidden `CREATE` operation"),
+        (r"\bGRANT\b", "Forbidden `GRANT` operation"),
+        (r";\s*\w+", "Forbidden multiple statements"),
     ]
 
     for pattern, reason in dangerous_patterns:

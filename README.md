@@ -11,14 +11,36 @@ This server provides AI assistants with a secure and structured way to explore a
 # Project Status
 This is an experimental project that is still under development. Data security and privacy issues have not been specifically addressed, so please use it with caution.
 
-# Capabilities
+# Features
 
-* `list_resources` to list tables
-* `read_resource` to read table data
-* `list_tools` to list tools
-* `call_tool` to execute an SQL
-* `list_prompts` to list prompts
-* `get_prompt` to get the prompt by name
+## Resources
+- **list_resources** - List all tables in the database as browsable resources
+- **read_resource** - Read table data via `greptime://<table>/data` URIs
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `execute_sql` | Execute SQL queries with format (csv/json/markdown) and limit options |
+| `describe_table` | Get table schema including column names, types, and constraints |
+| `health_check` | Check database connection status and server version |
+| `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
+| `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
+| `explain_query` | Analyze SQL or TQL query execution plans |
+
+## Prompts
+- **list_prompts** - List available prompt templates
+- **get_prompt** - Get a prompt template by name with argument substitution
+
+## Security
+All queries pass through a security gate that:
+- Blocks dangerous operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
+- Prevents multiple statement execution
+- Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN
+
+## Performance
+- Connection pooling for efficient database access
+- Async operations for non-blocking execution
 
 # Installation
 
@@ -50,6 +72,63 @@ Or via command-line args:
 * `--timezone` the session time zone, empty by default(using server default time zone).
 
 # Usage
+
+## Tool Examples
+
+### execute_sql
+Execute SQL queries with optional format and limit:
+```json
+{
+  "query": "SELECT * FROM metrics WHERE host = 'server1'",
+  "format": "json",
+  "limit": 100
+}
+```
+Formats: `csv` (default), `json`, `markdown`
+
+### execute_tql
+Execute PromQL-compatible time-series queries:
+```json
+{
+  "query": "rate(http_requests_total[5m])",
+  "start": "2024-01-01T00:00:00Z",
+  "end": "2024-01-01T01:00:00Z",
+  "step": "1m",
+  "lookback": "5m"
+}
+```
+
+### query_range
+Execute time-window aggregation queries:
+```json
+{
+  "table": "metrics",
+  "select": "ts, host, avg(cpu) RANGE '5m'",
+  "align": "1m",
+  "by": "host",
+  "where": "region = 'us-east'"
+}
+```
+
+### describe_table
+Get table schema information:
+```json
+{
+  "table": "metrics"
+}
+```
+
+### explain_query
+Analyze query execution plan:
+```json
+{
+  "query": "SELECT * FROM metrics",
+  "analyze": true
+}
+```
+
+### health_check
+Check database connection (no parameters required).
 
 ## Claude Desktop Integration
 
