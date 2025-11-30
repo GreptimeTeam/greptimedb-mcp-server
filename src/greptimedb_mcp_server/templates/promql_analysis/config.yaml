@@ -1,0 +1,19 @@
+description: "PromQL-style queries using GreptimeDB TQL EVAL syntax."
+version: "1.0"
+arguments:
+  - name: "metric"
+    description: "The metric name to query (required)."
+    required: true
+  - name: "start_time"
+    description: "Query start time (e.g., 'now-1h' or ISO timestamp)."
+    required: true
+  - name: "end_time"
+    description: "Query end time (e.g., 'now' or ISO timestamp)."
+    required: true
+metadata:
+  tags:
+    - promql
+    - tql
+    - metrics
+  suggested_use: "Run PromQL-compatible queries for rate, aggregations, and percentiles."
+  output_format: "markdown"

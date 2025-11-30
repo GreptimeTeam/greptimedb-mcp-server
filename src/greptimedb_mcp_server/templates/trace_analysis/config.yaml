@@ -1,0 +1,19 @@
+description: "Distributed trace analysis for OpenTelemetry spans in GreptimeDB."
+version: "1.0"
+arguments:
+  - name: "table"
+    description: "The spans/traces table to query (required)."
+    required: true
+  - name: "trace_id"
+    description: "Optional trace ID to analyze specific request."
+    required: false
+  - name: "service_name"
+    description: "Optional service name to filter spans."
+    required: false
+metadata:
+  tags:
+    - traces
+    - spans
+    - opentelemetry
+  suggested_use: "Analyze distributed traces, find slow spans, debug request flows."
+  output_format: "markdown"

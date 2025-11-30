@@ -1,0 +1,16 @@
+description: "Log analysis with full-text search and aggregation in GreptimeDB."
+version: "1.0"
+arguments:
+  - name: "table"
+    description: "The log table to query (required)."
+    required: true
+  - name: "search_term"
+    description: "Optional keyword to search in log messages."
+    required: false
+metadata:
+  tags:
+    - logs
+    - fulltext
+    - search
+  suggested_use: "Analyze application logs, search errors, and aggregate by severity."
+  output_format: "markdown"
