@@ -62,8 +62,34 @@ def _format_csv(columns: list, rows: list) -> str:
     return output.getvalue().rstrip("\r\n")
 
 
-def format_results(columns: list, rows: list, fmt: str = "csv") -> str:
-    """Format query results in specified format."""
+def format_results(
+    columns: list,
+    rows: list,
+    fmt: str = "csv",
+    mask_enabled: bool = True,
+    mask_patterns: list[str] | None = None,
+) -> str:
+    """Format query results in specified format.
+
+    Args:
+        columns: List of column names
+        rows: List of row tuples
+        fmt: Output format (csv, json, markdown)
+        mask_enabled: Whether to mask sensitive columns
+        mask_patterns: Additional sensitive patterns (combined with defaults)
+    """
+    # Apply masking if enabled
+    if mask_enabled:
+        from greptimedb_mcp_server.masking import (
+            DEFAULT_SENSITIVE_PATTERNS,
+            mask_rows,
+        )
+
+        patterns = list(DEFAULT_SENSITIVE_PATTERNS)
+        if mask_patterns:
+            patterns.extend(mask_patterns)
+        rows = mask_rows(columns, rows, patterns)
+
     if fmt == "json":
         return _format_json(columns, rows)
     elif fmt == "markdown":

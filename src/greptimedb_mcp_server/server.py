@@ -44,6 +44,8 @@ class AppState:
     db_config: dict
     pool_config: dict
     templates: dict
+    mask_enabled: bool = True
+    mask_patterns: list[str] = field(default_factory=list)
     pool: MySQLConnectionPool | None = field(default=None)
 
     def get_connection(self):
@@ -94,13 +96,23 @@ async def lifespan(mcp: FastMCP):
         **db_config,
     }
 
+    # Parse mask_patterns from comma-separated string
+    mask_patterns = []
+    if config.mask_patterns:
+        mask_patterns = [
+            p.strip() for p in config.mask_patterns.split(",") if p.strip()
+        ]
+
     _state = AppState(
         db_config=db_config,
         pool_config=pool_config,
         templates=templates_loader(),
+        mask_enabled=config.mask_enabled,
+        mask_patterns=mask_patterns,
     )
 
     logger.info(f"GreptimeDB Config: {db_config}")
+    logger.info(f"Data masking: {'enabled' if config.mask_enabled else 'disabled'}")
     logger.info("Starting GreptimeDB MCP server...")
 
     yield _state
@@ -130,7 +142,14 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
         return f"Query executed successfully. Rows affected: {result['rowcount']}"
 
     # Handle query results
-    formatted = format_results(result["columns"], result["rows"], format)
+    state = get_state()
+    formatted = format_results(
+        result["columns"],
+        result["rows"],
+        format,
+        mask_enabled=state.mask_enabled,
+        mask_patterns=state.mask_patterns,
+    )
 
     if format == "json":
         meta = {
@@ -235,7 +254,13 @@ async def describe_table(
                 cursor.execute(f"DESCRIBE {table}")
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchall()
-                return format_results(columns, rows, "markdown")
+                return format_results(
+                    columns,
+                    rows,
+                    "markdown",
+                    mask_enabled=state.mask_enabled,
+                    mask_patterns=state.mask_patterns,
+                )
 
     try:
         return await asyncio.to_thread(_sync_describe)
@@ -337,7 +362,13 @@ async def execute_tql(
     try:
         columns, rows = await asyncio.to_thread(_sync_tql)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(columns, rows, format)
+        formatted = format_results(
+            columns,
+            rows,
+            format,
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
 
         if format == "json":
             meta = {
@@ -425,7 +456,13 @@ async def query_range(
     try:
         columns, rows = await asyncio.to_thread(_sync_range)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(columns, rows, format)
+        formatted = format_results(
+            columns,
+            rows,
+            format,
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
 
         if format == "json":
             meta = {
@@ -480,7 +517,13 @@ async def explain_query(
                 cursor.execute(explain_query_str)
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchall()
-                return format_results(columns, rows, "markdown")
+                return format_results(
+                    columns,
+                    rows,
+                    "markdown",
+                    mask_enabled=state.mask_enabled,
+                    mask_patterns=state.mask_patterns,
+                )
 
     try:
         return await asyncio.to_thread(_sync_explain)
@@ -501,7 +544,13 @@ async def read_table_resource(table: str) -> str:
                 cursor.execute(f"SELECT * FROM {table} LIMIT %s", (RESULTS_LIMIT,))
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchall()
-                return format_results(columns, rows, "csv")
+                return format_results(
+                    columns,
+                    rows,
+                    "csv",
+                    mask_enabled=state.mask_enabled,
+                    mask_patterns=state.mask_patterns,
+                )
 
     try:
         return await asyncio.to_thread(_sync_read_table)

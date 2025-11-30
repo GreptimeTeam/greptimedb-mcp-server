@@ -27,6 +27,8 @@ def setup_state():
         database="testdb",
         time_zone="",
         pool_size=5,
+        mask_enabled=False,  # Disable masking for tests
+        mask_patterns="",
     )
     db_config = {
         "host": config.host,
@@ -47,6 +49,8 @@ def setup_state():
         db_config=db_config,
         pool_config=pool_config,
         templates=templates_loader(),
+        mask_enabled=config.mask_enabled,
+        mask_patterns=[],
     )
 
     yield

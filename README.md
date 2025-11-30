@@ -42,6 +42,25 @@ All queries pass through a security gate that:
 - Prevents multiple statement execution with dangerous operations
 - Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION, INFORMATION_SCHEMA
 
+## Data Masking
+Sensitive data in query results is automatically masked to protect privacy:
+
+**Default masked column patterns:**
+- Authentication: `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `access_key`, `private_key`, `credential`, `auth`
+- Financial: `credit_card`, `card_number`, `cvv`, `cvc`, `pin`, `bank_account`, `account_number`, `iban`, `swift`
+- Personal: `ssn`, `social_security`, `id_card`, `passport`
+
+**Configuration:**
+```bash
+# Disable masking (default: true)
+GREPTIMEDB_MASK_ENABLED=false
+
+# Add custom patterns (comma-separated)
+GREPTIMEDB_MASK_PATTERNS=phone,address,email
+```
+
+Masked values appear as `******` in all output formats (CSV, JSON, Markdown).
+
 ## Performance
 - Connection pooling for efficient database access
 - Async operations for non-blocking execution
@@ -65,6 +84,8 @@ GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
 GREPTIMEDB_TIMEZONE=UTC
 GREPTIMEDB_POOL_SIZE=5       # Optional: Connection pool size (defaults to 5)
+GREPTIMEDB_MASK_ENABLED=true # Optional: Enable data masking (defaults to true)
+GREPTIMEDB_MASK_PATTERNS=    # Optional: Additional sensitive column patterns (comma-separated)
 ```
 
 Or via command-line args:
@@ -75,7 +96,9 @@ Or via command-line args:
 * `--password` the database password, empty by default,
 * `--database` the database name, `public` by default,
 * `--timezone` the session time zone, empty by default (using server default time zone),
-* `--pool-size` the connection pool size, `5` by default.
+* `--pool-size` the connection pool size, `5` by default,
+* `--mask-enabled` enable data masking for sensitive columns, `true` by default,
+* `--mask-patterns` additional sensitive column patterns (comma-separated), empty by default.
 
 # Usage
 
@@ -168,7 +191,9 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
         "GREPTIMEDB_PASSWORD": "",
         "GREPTIMEDB_DATABASE": "public",
         "GREPTIMEDB_TIMEZONE": "",
-        "GREPTIMEDB_POOL_SIZE": "5"
+        "GREPTIMEDB_POOL_SIZE": "5",
+        "GREPTIMEDB_MASK_ENABLED": "true",
+        "GREPTIMEDB_MASK_PATTERNS": ""
       }
     }
   }
