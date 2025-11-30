@@ -39,6 +39,11 @@ class Config:
     GreptimeDB session time zone
     """
 
+    pool_size: int
+    """
+    Connection pool size
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -88,6 +93,13 @@ class Config:
             default=os.getenv("GREPTIMEDB_TIMEZONE", ""),
         )
 
+        parser.add_argument(
+            "--pool-size",
+            type=int,
+            help="Connection pool size (default: 5)",
+            default=int(os.getenv("GREPTIMEDB_POOL_SIZE", "5")),
+        )
+
         args = parser.parse_args()
         return Config(
             host=args.host,
@@ -96,4 +108,5 @@ class Config:
             user=args.user,
             password=args.password,
             time_zone=args.timezone,
+            pool_size=args.pool_size,
         )

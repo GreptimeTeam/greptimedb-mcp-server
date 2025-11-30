@@ -1,12 +1,18 @@
 """GreptimeDB MCP Server using FastMCP API."""
 
 from greptimedb_mcp_server.config import Config
-from greptimedb_mcp_server.utils import security_gate, templates_loader
+from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
+from greptimedb_mcp_server.utils import (
+    security_gate,
+    templates_loader,
+    validate_table_name,
+    validate_tql_param,
+    validate_query_component,
+    validate_duration,
+    validate_fill,
+)
 
 import asyncio
-import csv
-import datetime
-import io
 import json
 import logging
 import re
@@ -15,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP
 from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
 
@@ -23,130 +29,12 @@ from mysql.connector.pooling import MySQLConnectionPool
 RES_PREFIX = "greptime://"
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
-VALID_FORMATS = {"csv", "json", "markdown"}
-TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("greptimedb_mcp_server")
-
-
-def format_results(columns: list, rows: list, fmt: str = "csv") -> str:
-    """Format query results in specified format."""
-    if fmt == "json":
-        result = []
-        for row in rows:
-            row_dict = {}
-            for i, col in enumerate(columns):
-                val = row[i]
-                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
-                    val = str(val)
-                row_dict[col] = val
-            result.append(row_dict)
-        return json.dumps(result, ensure_ascii=False, indent=2)
-    elif fmt == "markdown":
-
-        def escape_md(val):
-            if val is None:
-                return ""
-            s = str(val)
-            s = s.replace("\\", "\\\\")
-            s = s.replace("|", "\\|")
-            s = s.replace("\n", " ")
-            s = s.replace("\r", "")
-            return s
-
-        escaped_cols = [c.replace("|", "\\|") for c in columns]
-        if not rows:
-            return (
-                "| "
-                + " | ".join(escaped_cols)
-                + " |\n"
-                + "| "
-                + " | ".join(["---"] * len(columns))
-                + " |"
-            )
-        lines = []
-        lines.append("| " + " | ".join(escaped_cols) + " |")
-        lines.append("| " + " | ".join(["---"] * len(columns)) + " |")
-        for row in rows:
-            formatted = [escape_md(v) for v in row]
-            lines.append("| " + " | ".join(formatted) + " |")
-        return "\n".join(lines)
-    else:  # csv
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(columns)
-        for row in rows:
-            # Convert datetime objects to strings for CSV
-            formatted_row = [
-                (
-                    str(v)
-                    if isinstance(v, (datetime.datetime, datetime.date, datetime.time))
-                    else v
-                )
-                for v in row
-            ]
-            writer.writerow(formatted_row)
-        return output.getvalue().rstrip("\r\n")
-
-
-def validate_table_name(table: str) -> str:
-    """Validate table name format."""
-    if not table:
-        raise ValueError("Table name is required")
-    if not TABLE_NAME_PATTERN.match(table):
-        raise ValueError("Invalid table name")
-    return table
-
-
-def validate_tql_param(value: str, name: str) -> str:
-    """Validate TQL parameter doesn't contain injection characters."""
-    if not value:
-        raise ValueError(f"{name} is required")
-    if "'" in value or ";" in value or "--" in value:
-        raise ValueError(f"Invalid characters in {name}")
-    return value
-
-
-def validate_query_component(value: str, name: str) -> str:
-    """Validate query component via security gate."""
-    if not value:
-        return value
-    is_dangerous, reason = security_gate(value)
-    if is_dangerous:
-        raise ValueError(f"Dangerous pattern in {name}: {reason}")
-    return value
-
-
-# Prometheus duration pattern: number + unit (ms, s, m, h, d, w, y)
-DURATION_PATTERN = re.compile(r"^(\d+)(ms|s|m|h|d|w|y)$")
-
-
-def validate_duration(value: str, name: str) -> str:
-    """Validate duration parameter follows Prometheus duration syntax."""
-    if not value:
-        raise ValueError(f"{name} is required")
-    if not DURATION_PATTERN.match(value):
-        raise ValueError(
-            f"Invalid {name}: must be a duration like '1m', '5m', '1h', '30s'"
-        )
-    return value
-
-
-# Valid FILL values: NULL, PREV, LINEAR, or numeric
-FILL_PATTERN = re.compile(r"^(NULL|PREV|LINEAR|(-?\d+(\.\d+)?))$", re.IGNORECASE)
-
-
-def validate_fill(value: str) -> str:
-    """Validate FILL parameter."""
-    if not value:
-        return value
-    if not FILL_PATTERN.match(value):
-        raise ValueError("Invalid fill: must be NULL, PREV, LINEAR, or a number")
-    return value
 
 
 @dataclass
@@ -201,7 +89,7 @@ async def lifespan(mcp: FastMCP):
     }
     pool_config = {
         "pool_name": "greptimedb_pool",
-        "pool_size": 5,
+        "pool_size": config.pool_size,
         "pool_reset_session": True,
         **db_config,
     }
@@ -226,6 +114,72 @@ mcp = FastMCP(
     lifespan=lifespan,
 )
 
+# Query type constants
+_READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
+
+
+def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
+    """Process and format query execution result."""
+    if result["type"] == "simple":
+        return result["text"]
+
+    if result["type"] == "error":
+        return f"Error: {result['message']}"
+
+    if result["type"] == "modify":
+        return f"Query executed successfully. Rows affected: {result['rowcount']}"
+
+    # Handle query results
+    formatted = format_results(result["columns"], result["rows"], format)
+
+    if format == "json":
+        meta = {
+            "data": json.loads(formatted),
+            "row_count": len(result["rows"]),
+            "truncated": result["has_more"],
+            "execution_time_ms": round(elapsed_ms, 2),
+        }
+        return json.dumps(meta, indent=2, ensure_ascii=False)
+
+    return formatted
+
+
+def _validate_sql_params(query: str, format: str, limit: int) -> int:
+    """Validate SQL parameters and return normalized limit."""
+    if not query:
+        raise ValueError("Query is required")
+    if format not in VALID_FORMATS:
+        raise ValueError(f"Invalid format: {format}. Must be one of: {VALID_FORMATS}")
+    return min(max(1, limit), MAX_QUERY_LIMIT)
+
+
+def _execute_query(state: AppState, query: str, limit: int) -> dict:
+    """Execute query synchronously and return result dict."""
+    with state.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query)
+            stmt = query.strip().upper()
+
+            if stmt.startswith("SHOW DATABASES"):
+                rows = cursor.fetchall()
+                return {"type": "simple", "text": "Databases\n" + "\n".join(r[0] for r in rows)}
+
+            if stmt.startswith("SHOW TABLES"):
+                rows = cursor.fetchall()
+                header = "Tables_in_" + state.db_config["database"]
+                return {"type": "simple", "text": header + "\n" + "\n".join(r[0] for r in rows)}
+
+            if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
+                if cursor.description is None:
+                    return {"type": "error", "message": "Query returned no results"}
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchmany(limit)
+                has_more = cursor.fetchone() is not None
+                return {"type": "query", "columns": columns, "rows": rows, "has_more": has_more}
+
+            conn.commit()
+            return {"type": "modify", "rowcount": cursor.rowcount}
+
 
 @mcp.tool()
 async def execute_sql(
@@ -237,14 +191,7 @@ async def execute_sql(
 ) -> str:
     """Execute SQL query against GreptimeDB. Please use MySQL dialect."""
     state = get_state()
-
-    if not query:
-        raise ValueError("Query is required")
-
-    if format not in VALID_FORMATS:
-        raise ValueError(f"Invalid format: {format}. Must be one of: {VALID_FORMATS}")
-
-    limit = min(max(1, limit), MAX_QUERY_LIMIT)
+    limit = _validate_sql_params(query, format, limit)
 
     is_dangerous, reason = security_gate(query=query)
     if is_dangerous:
@@ -252,71 +199,10 @@ async def execute_sql(
 
     start_time = time.time()
 
-    def _sync_execute():
-        with state.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)
-                stmt = query.strip().upper()
-
-                if stmt.startswith("SHOW DATABASES"):
-                    dbs = cursor.fetchall()
-                    result = ["Databases"]
-                    result.extend([db[0] for db in dbs])
-                    return {"type": "simple", "text": "\n".join(result)}
-
-                if stmt.startswith("SHOW TABLES"):
-                    tables = cursor.fetchall()
-                    result = ["Tables_in_" + state.db_config["database"]]
-                    result.extend([t[0] for t in tables])
-                    return {"type": "simple", "text": "\n".join(result)}
-
-                if any(
-                    stmt.startswith(cmd)
-                    for cmd in ["SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH"]
-                ):
-                    if cursor.description is None:
-                        return {"type": "error", "message": "Query returned no results"}
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchmany(limit)
-                    has_more = cursor.fetchone() is not None
-                    return {
-                        "type": "query",
-                        "columns": columns,
-                        "rows": rows,
-                        "has_more": has_more,
-                    }
-
-                conn.commit()
-                return {"type": "modify", "rowcount": cursor.rowcount}
-
     try:
-        result = await asyncio.to_thread(_sync_execute)
+        result = await asyncio.to_thread(_execute_query, state, query, limit)
         elapsed_ms = (time.time() - start_time) * 1000
-
-        if result["type"] == "simple":
-            return result["text"]
-
-        if result["type"] == "error":
-            return f"Error: {result['message']}"
-
-        if result["type"] == "modify":
-            return f"Query executed successfully. Rows affected: {result['rowcount']}"
-
-        columns = result["columns"]
-        rows = result["rows"]
-        has_more = result["has_more"]
-        formatted = format_results(columns, rows, format)
-
-        if format == "json":
-            meta = {
-                "data": json.loads(formatted),
-                "row_count": len(rows),
-                "truncated": has_more,
-                "execution_time_ms": round(elapsed_ms, 2),
-            }
-            return json.dumps(meta, indent=2, ensure_ascii=False)
-
-        return formatted
+        return _process_query_result(result, format, elapsed_ms)
 
     except Error as e:
         logger.error(f"Error executing SQL '{query}': {e}")
@@ -623,7 +509,7 @@ def _register_prompts():
         prompt_fn.__name__ = name
 
         # Use the decorator to register the prompt
-        decorated = mcp.prompt(name=name, description=description)(prompt_fn)
+        mcp.prompt(name=name, description=description)(prompt_fn)
 
 
 # Register prompts at module load

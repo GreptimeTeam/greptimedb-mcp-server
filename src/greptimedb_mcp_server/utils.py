@@ -81,3 +81,57 @@ def templates_loader() -> dict[str, dict[str, str]]:
             templates[category] = {"config": config, "template": template}
 
     return templates
+
+
+# Validation patterns
+TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+DURATION_PATTERN = re.compile(r"^(\d+)(ms|s|m|h|d|w|y)$")
+FILL_PATTERN = re.compile(r"^(NULL|PREV|LINEAR|(-?\d+(\.\d+)?))$", re.IGNORECASE)
+
+
+def validate_table_name(table: str) -> str:
+    """Validate table name format."""
+    if not table:
+        raise ValueError("Table name is required")
+    if not TABLE_NAME_PATTERN.match(table):
+        raise ValueError("Invalid table name")
+    return table
+
+
+def validate_tql_param(value: str, name: str) -> str:
+    """Validate TQL parameter doesn't contain injection characters."""
+    if not value:
+        raise ValueError(f"{name} is required")
+    if "'" in value or ";" in value or "--" in value:
+        raise ValueError(f"Invalid characters in {name}")
+    return value
+
+
+def validate_query_component(value: str, name: str) -> str:
+    """Validate query component via security gate."""
+    if not value:
+        return value
+    is_dangerous, reason = security_gate(value)
+    if is_dangerous:
+        raise ValueError(f"Dangerous pattern in {name}: {reason}")
+    return value
+
+
+def validate_duration(value: str, name: str) -> str:
+    """Validate duration parameter follows Prometheus duration syntax."""
+    if not value:
+        raise ValueError(f"{name} is required")
+    if not DURATION_PATTERN.match(value):
+        raise ValueError(
+            f"Invalid {name}: must be a duration like '1m', '5m', '1h', '30s'"
+        )
+    return value
+
+
+def validate_fill(value: str) -> str:
+    """Validate FILL parameter."""
+    if not value:
+        return value
+    if not FILL_PATTERN.match(value):
+        raise ValueError("Invalid fill: must be NULL, PREV, LINEAR, or a number")
+    return value

@@ -2,7 +2,7 @@ import pytest
 import datetime
 import json
 from greptimedb_mcp_server.utils import templates_loader, security_gate
-from greptimedb_mcp_server.server import format_results
+from greptimedb_mcp_server.formatter import format_results
 
 
 def test_templates_loader_basic():
@@ -278,3 +278,49 @@ def test_security_gate_dumpfile():
     result = security_gate("SELECT 'test' INTO DUMPFILE '/tmp/test.txt'")
     assert result[0] is True
     assert "DUMPFILE" in result[1]
+
+
+def test_security_gate_exec():
+    """Test security gate blocks EXEC/EXECUTE operations"""
+    result = security_gate("EXEC sp_executesql 'SELECT 1'")
+    assert result[0] is True
+    assert "Dynamic SQL" in result[1]
+
+    result = security_gate("EXECUTE immediate 'SELECT * FROM users'")
+    assert result[0] is True
+    assert "Dynamic SQL" in result[1]
+
+
+def test_security_gate_call():
+    """Test security gate blocks CALL operations"""
+    result = security_gate("CALL stored_procedure()")
+    assert result[0] is True
+    assert "Stored procedure" in result[1]
+
+
+def test_security_gate_replace_into():
+    """Test security gate blocks REPLACE INTO operations"""
+    result = security_gate("REPLACE INTO users VALUES (1, 'test')")
+    assert result[0] is True
+    assert "REPLACE INTO" in result[1]
+
+
+def test_security_gate_hex_encoding():
+    """Test security gate blocks hex-encoded content"""
+    result = security_gate("SELECT 0x44524f50205441424c45")
+    assert result[0] is True
+    assert "Encoded" in result[1]
+
+
+def test_security_gate_unhex():
+    """Test security gate blocks UNHEX function"""
+    result = security_gate("SELECT UNHEX('44524f50')")
+    assert result[0] is True
+    assert "Encoded" in result[1]
+
+
+def test_security_gate_char_function():
+    """Test security gate blocks CHAR function for encoding bypass"""
+    result = security_gate("SELECT CHAR(68,82,79,80)")
+    assert result[0] is True
+    assert "Encoded" in result[1]

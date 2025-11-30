@@ -12,8 +12,6 @@ from greptimedb_mcp_server.server import (
     query_range,
     explain_query,
     read_table_resource,
-    format_results,
-    mcp,
 )
 from greptimedb_mcp_server.utils import templates_loader
 
@@ -28,6 +26,7 @@ def setup_state():
         password="testpassword",
         database="testdb",
         time_zone="",
+        pool_size=5,
     )
     db_config = {
         "host": config.host,

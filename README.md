@@ -35,8 +35,11 @@ This is an experimental project that is still under development. Data security a
 ## Security
 All queries pass through a security gate that:
 - Blocks DDL/DML operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
+- Blocks dynamic SQL execution: EXEC, EXECUTE, CALL
+- Blocks data modification: REPLACE INTO
 - Blocks file system access: LOAD, COPY, OUTFILE, LOAD_FILE, INTO DUMPFILE
-- Prevents multiple statement execution
+- Blocks encoded content bypass attempts: hex encoding (0x...), UNHEX(), CHAR()
+- Prevents multiple statement execution with dangerous operations
 - Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION, INFORMATION_SCHEMA
 
 ## Performance
@@ -61,6 +64,7 @@ GREPTIMEDB_USER=root
 GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
 GREPTIMEDB_TIMEZONE=UTC
+GREPTIMEDB_POOL_SIZE=5       # Optional: Connection pool size (defaults to 5)
 ```
 
 Or via command-line args:
@@ -69,8 +73,9 @@ Or via command-line args:
 * `--port` the database port, must be MySQL protocol port,  `4002` by default,
 * `--user` the database username, empty by default,
 * `--password` the database password, empty by default,
-* `--database` the database name, `public` by default.
-* `--timezone` the session time zone, empty by default(using server default time zone).
+* `--database` the database name, `public` by default,
+* `--timezone` the session time zone, empty by default (using server default time zone),
+* `--pool-size` the connection pool size, `5` by default.
 
 # Usage
 
@@ -162,7 +167,8 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
         "GREPTIMEDB_USER": "root",
         "GREPTIMEDB_PASSWORD": "",
         "GREPTIMEDB_DATABASE": "public",
-        "GREPTIMEDB_TIMEZONE": ""
+        "GREPTIMEDB_TIMEZONE": "",
+        "GREPTIMEDB_POOL_SIZE": "5"
       }
     }
   }
