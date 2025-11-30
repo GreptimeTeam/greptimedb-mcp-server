@@ -40,9 +40,9 @@ FROM {{ table }}
 WHERE ts > now() - INTERVAL '1 hour'
 ORDER BY duration_nano DESC LIMIT 10;
 
--- p99 latency by service
+-- p99 latency by service (using approx_percentile_cont)
 SELECT service_name,
-       APPROX_PERCENTILE_CONT(duration_nano/1000000, 0.99) as p99_ms
+       approx_percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_nano/1000000) as p99_ms
 FROM {{ table }}
 WHERE ts > now() - INTERVAL '1 hour'
 GROUP BY service_name ORDER BY p99_ms DESC;

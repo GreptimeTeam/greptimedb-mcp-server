@@ -5,16 +5,16 @@
 ## Full-Text Search
 
 ```sql
--- Search logs containing keyword
+-- Search logs containing keyword (requires FULLTEXT index)
 SELECT ts, level, message
 FROM {{ table }}
-WHERE MATCHES(message, '{{ search_term | default("error") }}')
+WHERE message @@ '{{ search_term | default("error") }}'
 ORDER BY ts DESC LIMIT 100;
 
--- Case-insensitive search
+-- Alternative syntax
 SELECT ts, level, message
 FROM {{ table }}
-WHERE MATCHES(message, '(?i){{ search_term | default("exception") }}')
+WHERE matches_term(message, '{{ search_term | default("exception") }}')
 ORDER BY ts DESC LIMIT 50;
 ```
 
@@ -49,6 +49,6 @@ ORDER BY ts DESC LIMIT 50;
 
 ## Notes
 
-- Use `MATCHES(column, 'pattern')` for full-text search (requires FULLTEXT index)
+- Use `column @@ 'term'` or `matches_term(column, 'term')` for full-text search
+- Requires FULLTEXT index on the column
 - Common log columns: ts, level, service, message, trace_id
-- Regex patterns supported in MATCHES function
