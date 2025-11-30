@@ -264,3 +264,57 @@ def test_security_gate_desc():
     """Test security gate allows DESC/DESCRIBE queries"""
     result = security_gate("DESCRIBE users")
     assert result[0] is False
+
+
+# ============================================================
+# New Security Gate Tests (File System & Data Exfiltration)
+# ============================================================
+
+
+def test_security_gate_load():
+    """Test security gate blocks LOAD operations"""
+    result = security_gate("LOAD DATA INFILE '/etc/passwd' INTO TABLE users")
+    assert result[0] is True
+    assert "LOAD" in result[1]
+
+
+def test_security_gate_copy():
+    """Test security gate blocks COPY operations"""
+    result = security_gate("COPY users TO '/tmp/data.csv'")
+    assert result[0] is True
+    assert "COPY" in result[1]
+
+
+def test_security_gate_outfile():
+    """Test security gate blocks OUTFILE operations"""
+    result = security_gate("SELECT * FROM users INTO OUTFILE '/tmp/users.txt'")
+    assert result[0] is True
+    assert "OUTFILE" in result[1]
+
+
+def test_security_gate_load_file():
+    """Test security gate blocks LOAD_FILE function"""
+    result = security_gate("SELECT LOAD_FILE('/etc/passwd')")
+    assert result[0] is True
+    assert "LOAD_FILE" in result[1]
+
+
+def test_security_gate_union():
+    """Test security gate blocks UNION operations"""
+    result = security_gate("SELECT * FROM users UNION SELECT * FROM admins")
+    assert result[0] is True
+    assert "UNION" in result[1]
+
+
+def test_security_gate_information_schema():
+    """Test security gate blocks INFORMATION_SCHEMA access"""
+    result = security_gate("SELECT * FROM INFORMATION_SCHEMA.TABLES")
+    assert result[0] is True
+    assert "INFORMATION_SCHEMA" in result[1]
+
+
+def test_security_gate_dumpfile():
+    """Test security gate blocks INTO DUMPFILE operations"""
+    result = security_gate("SELECT 'test' INTO DUMPFILE '/tmp/test.txt'")
+    assert result[0] is True
+    assert "DUMPFILE" in result[1]

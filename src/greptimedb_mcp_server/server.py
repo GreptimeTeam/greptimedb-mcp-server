@@ -25,6 +25,12 @@ from pydantic import AnyUrl
 RES_PREFIX = "greptime://"
 # Resource query results limit
 RESULTS_LIMIT = 100
+# Maximum query limit
+MAX_QUERY_LIMIT = 10000
+# Valid output formats
+VALID_FORMATS = {"csv", "json", "markdown"}
+# Table name validation pattern
+TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 # Configure logging
 logging.basicConfig(
@@ -74,6 +80,41 @@ def format_results(columns: list, rows: list, fmt: str = "csv") -> str:
         return "\n".join([",".join(columns)] + result)
 
 
+def validate_table_name(table: str) -> str:
+    """Validate table name format."""
+    if not table:
+        raise ValueError("Table name is required")
+    if not TABLE_NAME_PATTERN.match(table):
+        raise ValueError("Invalid table name")
+    return table
+
+
+def validate_tql_param(value: str, name: str) -> str:
+    """Validate TQL parameter doesn't contain injection characters."""
+    if not value:
+        raise ValueError(f"{name} is required")
+    if "'" in value or ";" in value or "--" in value:
+        raise ValueError(f"Invalid characters in {name}")
+    return value
+
+
+def _security_error(reason: str) -> list[TextContent]:
+    """Create a security error response."""
+    return [
+        TextContent(type="text", text=f"Error: Dangerous operation blocked: {reason}")
+    ]
+
+
+def validate_query_component(value: str, name: str) -> str:
+    """Validate query component via security gate."""
+    if not value:
+        return value
+    is_dangerous, reason = security_gate(value)
+    if is_dangerous:
+        raise ValueError(f"Dangerous pattern in {name}: {reason}")
+    return value
+
+
 # The GreptimeDB MCP Server
 class DatabaseServer:
     def __init__(self, logger: Logger, config: Config):
@@ -109,6 +150,23 @@ class DatabaseServer:
         self.app.list_tools()(self.list_tools)
         self.app.call_tool()(self.call_tool)
 
+    def _build_query_response(
+        self, query_info: str, columns: list, rows: list, elapsed_ms: float
+    ) -> list[TextContent]:
+        """Build a JSON response for query results."""
+        result = format_results(columns, rows, "json")
+        meta = {
+            "query": query_info,
+            "data": json.loads(result),
+            "row_count": len(rows),
+            "execution_time_ms": round(elapsed_ms, 2),
+        }
+        return [
+            TextContent(
+                type="text", text=json.dumps(meta, indent=2, ensure_ascii=False)
+            )
+        ]
+
     def _get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
         if self._pool is None:
@@ -128,7 +186,6 @@ class DatabaseServer:
 
     async def list_resources(self) -> list[Resource]:
         """List GreptimeDB tables as resources."""
-        logger = self.logger
 
         def _sync_list_tables():
             with self._get_connection() as conn:
@@ -138,7 +195,7 @@ class DatabaseServer:
 
         try:
             tables = await asyncio.to_thread(_sync_list_tables)
-            logger.info(f"Found tables: {tables}")
+            self.logger.info(f"Found tables: {tables}")
 
             resources = []
             for table in tables:
@@ -152,23 +209,19 @@ class DatabaseServer:
                 )
             return resources
         except Error as e:
-            logger.error(f"Failed to list resources: {str(e)}")
+            self.logger.error(f"Failed to list resources: {str(e)}")
             return []
 
     async def read_resource(self, uri: AnyUrl) -> str:
         """Read table contents."""
-        logger = self.logger
-
         uri_str = str(uri)
-        logger.info(f"Reading resource: {uri_str}")
+        self.logger.info(f"Reading resource: {uri_str}")
 
         if not uri_str.startswith(RES_PREFIX):
             raise ValueError(f"Invalid URI scheme: {uri_str}")
 
         parts = uri_str[len(RES_PREFIX) :].split("/")
-        table = parts[0]
-        if not re.match(r"^[a-zA-Z_:-][a-zA-Z0-9_:\-\.@#]*", table):
-            raise ValueError("Invalid table name")
+        table = validate_table_name(parts[0])
 
         def _sync_read_table():
             with self._get_connection() as conn:
@@ -184,17 +237,15 @@ class DatabaseServer:
         try:
             return await asyncio.to_thread(_sync_read_table)
         except Error as e:
-            logger.error(f"Database error reading resource {uri}: {str(e)}")
+            self.logger.error(f"Database error reading resource {uri}: {str(e)}")
             raise RuntimeError(f"Database error: {str(e)}")
 
     async def list_prompts(self) -> list[Prompt]:
         """List available GreptimeDB prompts."""
-        logger = self.logger
-
-        logger.info("Listing prompts...")
+        self.logger.info("Listing prompts...")
         prompts = []
         for name, template in self.templates.items():
-            logger.info(f"Found prompt: {name}")
+            self.logger.info(f"Found prompt: {name}")
             prompts.append(
                 Prompt(
                     name=name,
@@ -208,11 +259,9 @@ class DatabaseServer:
         self, name: str, arguments: dict[str, str] | None
     ) -> GetPromptResult:
         """Handle the get_prompt request."""
-        logger = self.logger
-
-        logger.info(f"Get prompt: {name}")
+        self.logger.info(f"Get prompt: {name}")
         if name not in self.templates:
-            logger.error(f"Unknown template: {name}")
+            self.logger.error(f"Unknown template: {name}")
             raise ValueError(f"Unknown template: {name}")
 
         template = self.templates[name]
@@ -237,9 +286,7 @@ class DatabaseServer:
 
     async def list_tools(self) -> list[Tool]:
         """List available GreptimeDB tools."""
-        logger = self.logger
-
-        logger.info("Listing tools...")
+        self.logger.info("Listing tools...")
         return [
             Tool(
                 name="execute_sql",
@@ -383,9 +430,7 @@ class DatabaseServer:
 
     async def call_tool(self, name: str, arguments: dict) -> list[TextContent]:
         """Execute database tools."""
-        logger = self.logger
-
-        logger.info(f"Calling tool: {name} with arguments: {arguments}")
+        self.logger.info(f"Calling tool: {name} with arguments: {arguments}")
 
         if name == "health_check":
             return await self._health_check()
@@ -404,8 +449,6 @@ class DatabaseServer:
 
     async def _health_check(self) -> list[TextContent]:
         """Check database connection and server status."""
-        logger = self.logger
-        config = self.db_config
         start_time = time.time()
 
         def _sync_health_check():
@@ -422,35 +465,27 @@ class DatabaseServer:
             elapsed_ms = (time.time() - start_time) * 1000
             result = {
                 "status": "healthy",
-                "host": config["host"],
-                "port": config["port"],
-                "database": config["database"],
+                "host": self.db_config["host"],
+                "port": self.db_config["port"],
+                "database": self.db_config["database"],
                 "version": version,
                 "response_time_ms": round(elapsed_ms, 2),
             }
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         except Error as e:
-            logger.error(f"Health check failed: {e}")
+            self.logger.error(f"Health check failed: {e}")
             result = {
                 "status": "unhealthy",
                 "error": str(e),
-                "host": config["host"],
-                "port": config["port"],
+                "host": self.db_config["host"],
+                "port": self.db_config["port"],
             }
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     async def _describe_table(self, arguments: dict) -> list[TextContent]:
         """Get table schema information."""
-        logger = self.logger
-
-        table = arguments.get("table")
-        if not table:
-            raise ValueError("Table name is required")
-
-        # Validate table name
-        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table):
-            raise ValueError("Invalid table name")
+        table = validate_table_name(arguments.get("table"))
 
         def _sync_describe():
             with self._get_connection() as conn:
@@ -464,30 +499,25 @@ class DatabaseServer:
             result = await asyncio.to_thread(_sync_describe)
             return [TextContent(type="text", text=result)]
         except Error as e:
-            logger.error(f"Error describing table '{table}': {e}")
+            self.logger.error(f"Error describing table '{table}': {e}")
             return [TextContent(type="text", text=f"Error: {str(e)}")]
 
     async def _execute_sql(self, arguments: dict) -> list[TextContent]:
         """Execute SQL query with format and limit options."""
-        logger = self.logger
-        config = self.db_config
-
         query = arguments.get("query")
         if not query:
             raise ValueError("Query is required")
 
         fmt = arguments.get("format", "csv")
-        limit = arguments.get("limit", 1000)
+        if fmt not in VALID_FORMATS:
+            raise ValueError(f"Invalid format: {fmt}. Must be one of: {VALID_FORMATS}")
 
-        # Check if query is dangerous
+        limit = arguments.get("limit", 1000)
+        limit = min(max(1, limit), MAX_QUERY_LIMIT)
+
         is_dangerous, reason = security_gate(query=query)
         if is_dangerous:
-            return [
-                TextContent(
-                    type="text",
-                    text="Error: Contain dangerous operations, reason: " + reason,
-                )
-            ]
+            return _security_error(reason)
 
         start_time = time.time()
 
@@ -497,21 +527,18 @@ class DatabaseServer:
                     cursor.execute(query)
                     stmt = query.strip().upper()
 
-                    # Special handling for SHOW DATABASES
                     if stmt.startswith("SHOW DATABASES"):
                         dbs = cursor.fetchall()
                         result = ["Databases"]
                         result.extend([db[0] for db in dbs])
                         return {"type": "simple", "text": "\n".join(result)}
 
-                    # Special handling for SHOW TABLES
                     if stmt.startswith("SHOW TABLES"):
                         tables = cursor.fetchall()
-                        result = ["Tables_in_" + config["database"]]
+                        result = ["Tables_in_" + self.db_config["database"]]
                         result.extend([t[0] for t in tables])
                         return {"type": "simple", "text": "\n".join(result)}
 
-                    # Regular queries
                     if any(
                         stmt.startswith(cmd)
                         for cmd in ["SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH"]
@@ -526,7 +553,6 @@ class DatabaseServer:
                             "has_more": has_more,
                         }
 
-                    # Non-SELECT queries
                     conn.commit()
                     return {"type": "modify", "rowcount": cursor.rowcount}
 
@@ -567,13 +593,11 @@ class DatabaseServer:
             return [TextContent(type="text", text=formatted)]
 
         except Error as e:
-            logger.error(f"Error executing SQL '{query}': {e}")
+            self.logger.error(f"Error executing SQL '{query}': {e}")
             return [TextContent(type="text", text=f"Error executing query: {str(e)}")]
 
     async def _execute_tql(self, arguments: dict) -> list[TextContent]:
         """Execute TQL (PromQL) query."""
-        logger = self.logger
-
         query = arguments.get("query")
         start = arguments.get("start")
         end = arguments.get("end")
@@ -583,7 +607,16 @@ class DatabaseServer:
         if not all([query, start, end, step]):
             raise ValueError("query, start, end, and step are required")
 
-        # Build TQL statement
+        validate_tql_param(start, "start")
+        validate_tql_param(end, "end")
+        validate_tql_param(step, "step")
+        if lookback:
+            validate_tql_param(lookback, "lookback")
+
+        is_dangerous, reason = security_gate(query)
+        if is_dangerous:
+            return _security_error(reason)
+
         if lookback:
             tql = f"TQL EVAL ('{start}', '{end}', '{step}', '{lookback}') {query}"
         else:
@@ -617,13 +650,11 @@ class DatabaseServer:
             ]
 
         except Error as e:
-            logger.error(f"Error executing TQL '{tql}': {e}")
+            self.logger.error(f"Error executing TQL '{tql}': {e}")
             return [TextContent(type="text", text=f"Error executing TQL: {str(e)}")]
 
     async def _query_range(self, arguments: dict) -> list[TextContent]:
         """Execute GreptimeDB range query."""
-        logger = self.logger
-
         table = arguments.get("table")
         select = arguments.get("select")
         align = arguments.get("align")
@@ -635,11 +666,13 @@ class DatabaseServer:
         if not all([table, select, align]):
             raise ValueError("table, select, and align are required")
 
-        # Validate table name
-        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table):
-            raise ValueError("Invalid table name")
+        validate_table_name(table)
+        validate_query_component(select, "select")
+        validate_query_component(where, "where")
+        validate_query_component(by, "by")
+        validate_query_component(order_by, "order_by")
+        limit = min(max(1, limit), MAX_QUERY_LIMIT)
 
-        # Build range query
         query_parts = [f"SELECT {select}", f"FROM {table}"]
 
         if where:
@@ -655,15 +688,9 @@ class DatabaseServer:
 
         query = " ".join(query_parts)
 
-        # Security check
         is_dangerous, reason = security_gate(query=query)
         if is_dangerous:
-            return [
-                TextContent(
-                    type="text",
-                    text="Error: Contain dangerous operations, reason: " + reason,
-                )
-            ]
+            return _security_error(reason)
 
         start_time = time.time()
 
@@ -693,24 +720,24 @@ class DatabaseServer:
             ]
 
         except Error as e:
-            logger.error(f"Error executing range query '{query}': {e}")
+            self.logger.error(f"Error executing range query '{query}': {e}")
             return [
                 TextContent(type="text", text=f"Error executing range query: {str(e)}")
             ]
 
     async def _explain_query(self, arguments: dict) -> list[TextContent]:
         """Explain query execution plan."""
-        logger = self.logger
-
         query = arguments.get("query")
         analyze = arguments.get("analyze", False)
 
         if not query:
             raise ValueError("query is required")
 
-        # Build EXPLAIN statement
+        is_dangerous, reason = security_gate(query)
+        if is_dangerous:
+            return _security_error(reason)
+
         if query.strip().upper().startswith("TQL"):
-            # For TQL queries, use TQL EXPLAIN or TQL ANALYZE
             if analyze:
                 explain_query = query.replace("TQL EVAL", "TQL ANALYZE", 1)
                 explain_query = explain_query.replace("TQL EVALUATE", "TQL ANALYZE", 1)
@@ -718,7 +745,6 @@ class DatabaseServer:
                 explain_query = query.replace("TQL EVAL", "TQL EXPLAIN", 1)
                 explain_query = explain_query.replace("TQL EVALUATE", "TQL EXPLAIN", 1)
         else:
-            # For SQL queries
             if analyze:
                 explain_query = f"EXPLAIN ANALYZE {query}"
             else:
@@ -736,12 +762,11 @@ class DatabaseServer:
             result = await asyncio.to_thread(_sync_explain)
             return [TextContent(type="text", text=result)]
         except Error as e:
-            logger.error(f"Error explaining query '{query}': {e}")
+            self.logger.error(f"Error explaining query '{query}': {e}")
             return [TextContent(type="text", text=f"Error explaining query: {str(e)}")]
 
     async def run(self):
         """Run the MCP server."""
-        logger = self.logger
         from mcp.server.stdio import stdio_server
 
         async with stdio_server() as (read_stream, write_stream):
@@ -750,7 +775,7 @@ class DatabaseServer:
                     read_stream, write_stream, self.app.create_initialization_options()
                 )
             except Exception as e:
-                logger.error(f"Server error: {str(e)}", exc_info=True)
+                self.logger.error(f"Server error: {str(e)}", exc_info=True)
                 raise
 
 

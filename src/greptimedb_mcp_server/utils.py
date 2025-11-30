@@ -24,6 +24,7 @@ def security_gate(query: str) -> tuple[bool, str]:
 
     # Check for dangerous patterns
     dangerous_patterns = [
+        # DDL/DML operations
         (r"\bDROP\b", "Forbidden `DROP` operation"),
         (r"\bDELETE\b", "Forbidden `DELETE` operation"),
         (r"\bREVOKE\b", "Forbidden `REVOKE` operation"),
@@ -33,6 +34,17 @@ def security_gate(query: str) -> tuple[bool, str]:
         (r"\bALTER\b", "Forbidden `ALTER` operation"),
         (r"\bCREATE\b", "Forbidden `CREATE` operation"),
         (r"\bGRANT\b", "Forbidden `GRANT` operation"),
+        # File system access
+        (r"\bLOAD\b", "Forbidden `LOAD` operation"),
+        (r"\bCOPY\b", "Forbidden `COPY` operation"),
+        (r"\bOUTFILE\b", "Forbidden `OUTFILE` operation"),
+        (r"\bLOAD_FILE\b", "Forbidden `LOAD_FILE` function"),
+        (r"\bINTO\s+DUMPFILE\b", "Forbidden `INTO DUMPFILE` operation"),
+        # Data exfiltration
+        (r"\bUNION\b", "Forbidden `UNION` operation"),
+        # Schema enumeration
+        (r"\bINFORMATION_SCHEMA\b", "Forbidden `INFORMATION_SCHEMA` access"),
+        # Multiple statements
         (r";\s*\w+", "Forbidden multiple statements"),
     ]
 

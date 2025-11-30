@@ -92,8 +92,7 @@ async def test_security_gate_dangerous_query(logger, config):
 
     result = await server.call_tool("execute_sql", {"query": "DROP TABLE users"})
 
-    # Verify that the security gate blocked the query
-    assert "Error: Contain dangerous operations" in result[0].text
+    assert "Error: Dangerous operation blocked" in result[0].text
     assert "Forbidden `DROP` operation" in result[0].text
 
 
@@ -556,3 +555,85 @@ async def test_read_resource_invalid_table_name(logger, config):
     with pytest.raises(ValueError) as excinfo:
         await server.read_resource("greptime://123invalid/data")
     assert "Invalid table name" in str(excinfo.value)
+
+
+# ============================================================
+# Security Enhancement Tests
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_invalid_format(logger, config):
+    """Test execute_sql with invalid format parameter"""
+    server = DatabaseServer(logger, config)
+    with pytest.raises(ValueError) as excinfo:
+        await server.call_tool("execute_sql", {"query": "SELECT 1", "format": "xml"})
+    assert "Invalid format" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_union_blocked(logger, config):
+    """Test execute_sql blocks UNION queries"""
+    server = DatabaseServer(logger, config)
+    result = await server.call_tool(
+        "execute_sql", {"query": "SELECT * FROM users UNION SELECT * FROM admins"}
+    )
+    assert "UNION" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_injection_blocked(logger, config):
+    """Test execute_tql blocks injection in parameters"""
+    server = DatabaseServer(logger, config)
+    with pytest.raises(ValueError) as excinfo:
+        await server.call_tool(
+            "execute_tql",
+            {
+                "query": "rate(x[5m])",
+                "start": "2024-01-01'; DROP TABLE users; --",
+                "end": "2024-01-01T01:00:00Z",
+                "step": "1m",
+            },
+        )
+    assert "Invalid characters" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_dangerous_query_blocked(logger, config):
+    """Test execute_tql blocks dangerous patterns in query"""
+    server = DatabaseServer(logger, config)
+    result = await server.call_tool(
+        "execute_tql",
+        {
+            "query": "rate(x[5m]) UNION SELECT * FROM users",
+            "start": "2024-01-01T00:00:00Z",
+            "end": "2024-01-01T01:00:00Z",
+            "step": "1m",
+        },
+    )
+    assert "Error: Dangerous operation blocked" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_query_range_injection_blocked(logger, config):
+    """Test query_range blocks injection in where clause"""
+    server = DatabaseServer(logger, config)
+    with pytest.raises(ValueError) as excinfo:
+        await server.call_tool(
+            "query_range",
+            {
+                "table": "metrics",
+                "select": "ts, avg(cpu)",
+                "align": "1m",
+                "where": "1=1; DROP TABLE users; --",
+            },
+        )
+    assert "Dangerous pattern" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_explain_query_dangerous_blocked(logger, config):
+    """Test explain_query blocks dangerous queries"""
+    server = DatabaseServer(logger, config)
+    result = await server.call_tool("explain_query", {"query": "DROP TABLE users"})
+    assert "Error: Dangerous operation blocked" in result[0].text
