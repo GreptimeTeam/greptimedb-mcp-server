@@ -1,0 +1,16 @@
+description: "IoT device monitoring with TAG/FIELD semantics and device aggregation."
+version: "1.0"
+arguments:
+  - name: "table"
+    description: "The metrics table to query (required)."
+    required: true
+  - name: "device_id"
+    description: "Optional device identifier to filter by."
+    required: false
+metadata:
+  tags:
+    - iot
+    - devices
+    - sensors
+  suggested_use: "Monitor IoT devices, detect anomalies, track device health."
+  output_format: "markdown"

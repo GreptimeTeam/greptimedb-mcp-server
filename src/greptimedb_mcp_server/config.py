@@ -39,6 +39,21 @@ class Config:
     GreptimeDB session time zone
     """
 
+    pool_size: int
+    """
+    Connection pool size
+    """
+
+    mask_enabled: bool
+    """
+    Enable data masking for sensitive columns
+    """
+
+    mask_patterns: str
+    """
+    Additional sensitive column patterns (comma-separated)
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -88,6 +103,27 @@ class Config:
             default=os.getenv("GREPTIMEDB_TIMEZONE", ""),
         )
 
+        parser.add_argument(
+            "--pool-size",
+            type=int,
+            help="Connection pool size (default: 5)",
+            default=int(os.getenv("GREPTIMEDB_POOL_SIZE", "5")),
+        )
+
+        parser.add_argument(
+            "--mask-enabled",
+            type=lambda x: x.lower() not in ("false", "0", "no"),
+            help="Enable data masking for sensitive columns (default: true)",
+            default=os.getenv("GREPTIMEDB_MASK_ENABLED", "true"),
+        )
+
+        parser.add_argument(
+            "--mask-patterns",
+            type=str,
+            help="Additional sensitive column patterns (comma-separated)",
+            default=os.getenv("GREPTIMEDB_MASK_PATTERNS", ""),
+        )
+
         args = parser.parse_args()
         return Config(
             host=args.host,
@@ -96,4 +132,7 @@ class Config:
             user=args.user,
             password=args.password,
             time_zone=args.timezone,
+            pool_size=args.pool_size,
+            mask_enabled=args.mask_enabled,
+            mask_patterns=args.mask_patterns,
         )
