@@ -60,10 +60,22 @@ Masked values appear as `******` in all output formats (CSV, JSON, Markdown).
 
 # Installation
 
-```
+```bash
 pip install greptimedb-mcp-server
+
+# Upgrade to latest version
+pip install -U greptimedb-mcp-server
 ```
 
+After installation, run the server:
+
+```bash
+# Using the command
+greptimedb-mcp-server --host localhost --port 4002 --database public
+
+# Or as a Python module
+python -m greptimedb_mcp_server.server
+```
 
 # Configuration
 
@@ -158,12 +170,30 @@ Configure the MCP server in Claude Desktop's configuration file:
 
 #### MacOS
 
-Location: `~/Library/Application Support/Claude/claude_desktop_config.json`
+Location: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 #### Windows
 
-Location: `%APPDATA%/Claude/claude_desktop_config.json`
+Location: `%APPDATA%/Claude/claude_desktop_config.json`
 
+**Option 1: Using pip installed command (recommended)**
+
+```json
+{
+  "mcpServers": {
+    "greptimedb": {
+      "command": "greptimedb-mcp-server",
+      "args": [
+        "--host", "localhost",
+        "--port", "4002",
+        "--database", "public"
+      ]
+    }
+  }
+}
+```
+
+**Option 2: Using uv with source directory**
 
 ```json
 {
@@ -200,7 +230,7 @@ MIT License - see LICENSE.md file for details.
 # Contribute
 
 ## Prerequisites
-- Python with `uv` package manager
+- Python with `uv` package manager
 - GreptimeDB installation
 - MCP server dependencies
 
