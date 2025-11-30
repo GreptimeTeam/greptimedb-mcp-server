@@ -84,17 +84,17 @@ def templates_loader() -> dict[str, dict[str, str]]:
 
 
 # Validation patterns
-TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$")
 DURATION_PATTERN = re.compile(r"^(\d+)(ms|s|m|h|d|w|y)$")
 FILL_PATTERN = re.compile(r"^(NULL|PREV|LINEAR|(-?\d+(\.\d+)?))$", re.IGNORECASE)
 
 
 def validate_table_name(table: str) -> str:
-    """Validate table name format."""
+    """Validate table name format. Supports schema.table format."""
     if not table:
         raise ValueError("Table name is required")
     if not TABLE_NAME_PATTERN.match(table):
-        raise ValueError("Invalid table name")
+        raise ValueError("Invalid table name: must be 'table' or 'schema.table' format")
     return table
 
 

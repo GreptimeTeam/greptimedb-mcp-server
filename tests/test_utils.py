@@ -1,7 +1,11 @@
 import pytest
 import datetime
 import json
-from greptimedb_mcp_server.utils import templates_loader, security_gate
+from greptimedb_mcp_server.utils import (
+    templates_loader,
+    security_gate,
+    validate_table_name,
+)
 from greptimedb_mcp_server.formatter import format_results
 
 
@@ -324,3 +328,36 @@ def test_security_gate_char_function():
     result = security_gate("SELECT CHAR(68,82,79,80)")
     assert result[0] is True
     assert "Encoded" in result[1]
+
+
+def test_validate_table_name_simple():
+    """Test validate_table_name with simple table names"""
+    assert validate_table_name("users") == "users"
+    assert validate_table_name("my_table") == "my_table"
+    assert validate_table_name("Table123") == "Table123"
+
+
+def test_validate_table_name_schema_qualified():
+    """Test validate_table_name with schema.table format"""
+    assert validate_table_name("public.users") == "public.users"
+    assert validate_table_name("schema_name.table_name") == "schema_name.table_name"
+    assert validate_table_name("my_schema.my_table") == "my_schema.my_table"
+
+
+def test_validate_table_name_invalid():
+    """Test validate_table_name rejects invalid names"""
+    with pytest.raises(ValueError) as excinfo:
+        validate_table_name("123invalid")
+    assert "Invalid table name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_table_name("table-with-dash")
+    assert "Invalid table name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_table_name("schema.table.extra")
+    assert "Invalid table name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_table_name("")
+    assert "required" in str(excinfo.value)

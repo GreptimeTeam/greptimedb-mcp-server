@@ -162,12 +162,19 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
 
             if stmt.startswith("SHOW DATABASES"):
                 rows = cursor.fetchall()
-                return {"type": "simple", "text": "Databases\n" + "\n".join(r[0] for r in rows)}
+                header = cursor.description[0][0] if cursor.description else "Database"
+                return {
+                    "type": "simple",
+                    "text": header + "\n" + "\n".join(r[0] for r in rows),
+                }
 
             if stmt.startswith("SHOW TABLES"):
                 rows = cursor.fetchall()
-                header = "Tables_in_" + state.db_config["database"]
-                return {"type": "simple", "text": header + "\n" + "\n".join(r[0] for r in rows)}
+                header = cursor.description[0][0] if cursor.description else "Tables"
+                return {
+                    "type": "simple",
+                    "text": header + "\n" + "\n".join(r[0] for r in rows),
+                }
 
             if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
                 if cursor.description is None:
@@ -175,7 +182,12 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchmany(limit)
                 has_more = cursor.fetchone() is not None
-                return {"type": "query", "columns": columns, "rows": rows, "has_more": has_more}
+                return {
+                    "type": "query",
+                    "columns": columns,
+                    "rows": rows,
+                    "has_more": has_more,
+                }
 
             conn.commit()
             return {"type": "modify", "rowcount": cursor.rowcount}
@@ -211,7 +223,7 @@ async def execute_sql(
 
 @mcp.tool()
 async def describe_table(
-    table: Annotated[str, "The table name to describe"],
+    table: Annotated[str, "Table name to describe (supports schema.table format)"],
 ) -> str:
     """Get table schema information including column names, types, and constraints."""
     state = get_state()
@@ -280,12 +292,17 @@ async def execute_tql(
     end: Annotated[str, "End time (RFC3339, Unix timestamp, or relative like 'now')"],
     step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
     lookback: Annotated[str | None, "Lookback delta for range queries"] = None,
+    format: Annotated[
+        str, "Output format: csv, json, or markdown (default: json)"
+    ] = "json",
 ) -> str:
     """Execute TQL (PromQL-compatible) query for time-series analysis."""
     state = get_state()
 
     if not all([query, start, end, step]):
         raise ValueError("query, start, end, and step are required")
+    if format not in VALID_FORMATS:
+        raise ValueError(f"Invalid format: {format}. Must be one of: {VALID_FORMATS}")
 
     validate_tql_param(start, "start")
     validate_tql_param(end, "end")
@@ -309,21 +326,24 @@ async def execute_tql(
             with conn.cursor() as cursor:
                 cursor.execute(tql)
                 columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
+                rows = cursor.fetchmany(MAX_QUERY_LIMIT)
                 return columns, rows
 
     try:
         columns, rows = await asyncio.to_thread(_sync_tql)
         elapsed_ms = (time.time() - start_time) * 1000
-        result = format_results(columns, rows, "json")
+        formatted = format_results(columns, rows, format)
 
-        meta = {
-            "tql": tql,
-            "data": json.loads(result),
-            "row_count": len(rows),
-            "execution_time_ms": round(elapsed_ms, 2),
-        }
-        return json.dumps(meta, indent=2, ensure_ascii=False)
+        if format == "json":
+            meta = {
+                "tql": tql,
+                "data": json.loads(formatted),
+                "row_count": len(rows),
+                "execution_time_ms": round(elapsed_ms, 2),
+            }
+            return json.dumps(meta, indent=2, ensure_ascii=False)
+
+        return formatted
 
     except Error as e:
         logger.error(f"Error executing TQL '{tql}': {e}")
@@ -332,7 +352,7 @@ async def execute_tql(
 
 @mcp.tool()
 async def query_range(
-    table: Annotated[str, "Table name to query"],
+    table: Annotated[str, "Table name to query (supports schema.table format)"],
     select: Annotated[
         str, "Columns and aggregations, e.g., 'ts, host, avg(cpu) RANGE \\'5m\\''"
     ],
@@ -340,7 +360,10 @@ async def query_range(
     by: Annotated[str | None, "Group by columns, e.g., 'host'"] = None,
     where: Annotated[str | None, "WHERE clause conditions"] = None,
     fill: Annotated[str | None, "Fill strategy: NULL, PREV, LINEAR, or a value"] = None,
-    order_by: Annotated[str, "ORDER BY clause"] = "ts DESC",
+    order_by: Annotated[str | None, "ORDER BY clause (e.g., 'ts DESC')"] = None,
+    format: Annotated[
+        str, "Output format: csv, json, or markdown (default: json)"
+    ] = "json",
     limit: Annotated[int, "Maximum rows to return"] = 1000,
 ) -> str:
     """Execute time-window aggregation query using GreptimeDB's RANGE query syntax."""
@@ -348,6 +371,8 @@ async def query_range(
 
     if not all([table, select, align]):
         raise ValueError("table, select, and align are required")
+    if format not in VALID_FORMATS:
+        raise ValueError(f"Invalid format: {format}. Must be one of: {VALID_FORMATS}")
 
     validate_table_name(table)
     validate_duration(align, "align")
@@ -371,7 +396,9 @@ async def query_range(
     if fill:
         query_parts.append(f"FILL {fill}")
 
-    query_parts.append(f"ORDER BY {order_by}")
+    if order_by:
+        query_parts.append(f"ORDER BY {order_by}")
+
     query_parts.append(f"LIMIT {limit}")
 
     query = " ".join(query_parts)
@@ -393,15 +420,18 @@ async def query_range(
     try:
         columns, rows = await asyncio.to_thread(_sync_range)
         elapsed_ms = (time.time() - start_time) * 1000
-        result = format_results(columns, rows, "json")
+        formatted = format_results(columns, rows, format)
 
-        meta = {
-            "query": query,
-            "data": json.loads(result),
-            "row_count": len(rows),
-            "execution_time_ms": round(elapsed_ms, 2),
-        }
-        return json.dumps(meta, indent=2, ensure_ascii=False)
+        if format == "json":
+            meta = {
+                "query": query,
+                "data": json.loads(formatted),
+                "row_count": len(rows),
+                "execution_time_ms": round(elapsed_ms, 2),
+            }
+            return json.dumps(meta, indent=2, ensure_ascii=False)
+
+        return formatted
 
     except Error as e:
         logger.error(f"Error executing range query '{query}': {e}")

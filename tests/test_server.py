@@ -78,7 +78,7 @@ async def test_execute_sql_show_tables():
     """Test SHOW TABLES query execution"""
     result = await execute_sql(query="SHOW TABLES")
 
-    assert "Tables_in_testdb" in result
+    assert "table_name" in result  # Uses actual column name from cursor.description
     assert "users" in result
     assert "orders" in result
 
@@ -426,3 +426,78 @@ async def test_read_table_resource_invalid_name():
     with pytest.raises(ValueError) as excinfo:
         await read_table_resource(table="123invalid")
     assert "Invalid table name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_describe_table_schema_qualified():
+    """Test describe_table with schema.table format"""
+    result = await describe_table(table="public.users")
+    assert "Column" in result
+    assert "Type" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_csv_format():
+    """Test execute_tql with CSV format"""
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+        format="csv",
+    )
+    # CSV format returns raw CSV, not JSON wrapper
+    assert "ts" in result or "value" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_invalid_format():
+    """Test execute_tql with invalid format parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await execute_tql(
+            query="rate(x[5m])",
+            start="2024-01-01T00:00:00Z",
+            end="2024-01-01T01:00:00Z",
+            step="1m",
+            format="xml",
+        )
+    assert "Invalid format" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_query_range_csv_format():
+    """Test query_range with CSV format"""
+    result = await query_range(
+        table="metrics",
+        select="ts, avg(cpu)",
+        align="1m",
+        format="csv",
+    )
+    # CSV format returns raw CSV, not JSON wrapper
+    assert "ts" in result or "avg" in result
+
+
+@pytest.mark.asyncio
+async def test_query_range_invalid_format():
+    """Test query_range with invalid format parameter"""
+    with pytest.raises(ValueError) as excinfo:
+        await query_range(
+            table="metrics",
+            select="ts, avg(cpu)",
+            align="1m",
+            format="xml",
+        )
+    assert "Invalid format" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_query_range_schema_qualified_table():
+    """Test query_range with schema.table format"""
+    result = await query_range(
+        table="public.metrics",
+        select="ts, avg(cpu)",
+        align="1m",
+    )
+    data = json.loads(result)
+    assert "query" in data
+    assert "public.metrics" in data["query"]
