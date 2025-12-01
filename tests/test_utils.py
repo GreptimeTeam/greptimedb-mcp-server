@@ -280,6 +280,14 @@ def test_security_gate_show():
     assert result[0] is False
 
 
+def test_security_gate_show_create_table():
+    """Test security gate allows SHOW CREATE TABLE queries"""
+    result = security_gate("SHOW CREATE TABLE my_table")
+    assert result[0] is False
+    result = security_gate("show create table my_schema.my_table")
+    assert result[0] is False
+
+
 def test_security_gate_desc():
     """Test security gate allows DESC/DESCRIBE queries"""
     result = security_gate("DESCRIBE users")
