@@ -681,12 +681,13 @@ async def create_pipeline(
             if response.status == 200:
                 try:
                     result = json.loads(response_text)
-                    version = result.get("version", "unknown")
+                    pipelines = result.get("pipelines", [])
+                    version = pipelines[0]["version"] if pipelines else "unknown"
                     return (
                         f"Pipeline '{name}' created successfully.\n"
                         f"Version: {version}"
                     )
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, KeyError, IndexError):
                     return f"Pipeline '{name}' created successfully."
             else:
                 error_detail = response_text if response_text else "No details"
