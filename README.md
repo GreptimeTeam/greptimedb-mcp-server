@@ -284,7 +284,7 @@ Delete a specific version of a pipeline:
 ```json
 {
   "name": "nginx_logs",
-  "version": "2024-06-27 12:02:34.257312110Z"
+  "version": "2024-06-27 12:02:34.257312110"
 }
 ```
 

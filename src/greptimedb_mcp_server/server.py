@@ -51,6 +51,7 @@ class AppState:
     mask_enabled: bool = True
     mask_patterns: list[str] = field(default_factory=list)
     pool: MySQLConnectionPool | None = field(default=None)
+    http_session: aiohttp.ClientSession | None = field(default=None)
 
     def get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
@@ -124,15 +125,19 @@ async def lifespan(mcp: FastMCP):
         http_base_url=http_base_url,
         mask_enabled=config.mask_enabled,
         mask_patterns=mask_patterns,
+        http_session=aiohttp.ClientSession(),
     )
 
     logger.info(f"GreptimeDB Config: {db_config}")
     logger.info(f"Data masking: {'enabled' if config.mask_enabled else 'disabled'}")
     logger.info("Starting GreptimeDB MCP server...")
 
-    yield _state
-
-    logger.info("Shutting down GreptimeDB MCP server...")
+    try:
+        yield _state
+    finally:
+        logger.info("Shutting down GreptimeDB MCP server...")
+        if _state.http_session:
+            await _state.http_session.close()
 
 
 mcp = FastMCP(
@@ -574,7 +579,6 @@ async def read_table_resource(table: str) -> str:
         raise RuntimeError(f"Database error: {str(e)}")
 
 
-# Pipeline name validation pattern
 PIPELINE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -595,7 +599,6 @@ def _format_pipeline_version(ns_timestamp: int) -> str:
     seconds = ns_timestamp // 1_000_000_000
     nanoseconds = ns_timestamp % 1_000_000_000
     dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
-    # Format: %Y-%m-%d %H:%M:%S%.f (matching HTTP API format)
     return f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{nanoseconds:09d}"
 
 
@@ -632,7 +635,6 @@ async def list_pipelines(
         if not rows:
             return "No pipelines found."
 
-        # Convert nanosecond timestamps to HTTP API version format
         version_idx = columns.index("version")
         converted_rows = []
         for row in rows:
@@ -668,31 +670,30 @@ async def create_pipeline(
     auth = state.get_http_auth()
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                data=pipeline,
-                headers={"Content-Type": "application/x-yaml"},
-                auth=auth,
-            ) as response:
-                response_text = await response.text()
+        async with state.http_session.post(
+            url,
+            data=pipeline,
+            headers={"Content-Type": "application/x-yaml"},
+            auth=auth,
+        ) as response:
+            response_text = await response.text()
 
-                if response.status == 200:
-                    try:
-                        result = json.loads(response_text)
-                        version = result.get("version", "unknown")
-                        return (
-                            f"Pipeline '{name}' created successfully.\n"
-                            f"Version: {version}"
-                        )
-                    except json.JSONDecodeError:
-                        return f"Pipeline '{name}' created successfully."
-                else:
-                    error_detail = response_text if response_text else "No details"
+            if response.status == 200:
+                try:
+                    result = json.loads(response_text)
+                    version = result.get("version", "unknown")
                     return (
-                        f"Error creating pipeline (HTTP {response.status}): "
-                        f"{error_detail}"
+                        f"Pipeline '{name}' created successfully.\n"
+                        f"Version: {version}"
                     )
+                except json.JSONDecodeError:
+                    return f"Pipeline '{name}' created successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error creating pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
 
     except aiohttp.ClientError as e:
         logger.error(f"HTTP error creating pipeline '{name}': {e}")
@@ -704,21 +705,16 @@ async def dryrun_pipeline(
     pipeline_name: Annotated[str, "Name of the pipeline to test"],
     data: Annotated[str, "Test data in JSON format (single object or array)"],
 ) -> str:
-    """Test a pipeline with sample data without actually writing to the database (dryrun)."""
+    """Test a pipeline with sample data without writing to the database."""
     state = get_state()
     pipeline_name = _validate_pipeline_name(pipeline_name)
 
-    # Validate and normalize JSON data
-    # Handle case where LLM might pass already-escaped JSON string
     try:
         parsed = json.loads(data)
-        # Re-serialize to ensure consistent formatting
         normalized_data = json.dumps(parsed, ensure_ascii=False)
     except json.JSONDecodeError as e:
         return f"Error: Invalid JSON data: {str(e)}"
 
-    # Use new API format: data is passed as a JSON string, not an object
-    # Note: the endpoint is /_dryrun (with underscore)
     url = f"{state.http_base_url}/v1/pipelines/_dryrun"
     request_body = {
         "pipeline_name": pipeline_name,
@@ -729,26 +725,25 @@ async def dryrun_pipeline(
     logger.debug(f"Dryrun request body: {request_body}")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=request_body,
-                auth=auth,
-            ) as response:
-                response_text = await response.text()
+        async with state.http_session.post(
+            url,
+            json=request_body,
+            auth=auth,
+        ) as response:
+            response_text = await response.text()
 
-                if response.status == 200:
-                    try:
-                        result = json.loads(response_text)
-                        return json.dumps(result, indent=2, ensure_ascii=False)
-                    except json.JSONDecodeError:
-                        return response_text
-                else:
-                    error_detail = response_text if response_text else "No details"
-                    return (
-                        f"Error testing pipeline (HTTP {response.status}): "
-                        f"{error_detail}"
-                    )
+            if response.status == 200:
+                try:
+                    result = json.loads(response_text)
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    return response_text
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error testing pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
 
     except aiohttp.ClientError as e:
         logger.error(f"HTTP error testing pipeline '{pipeline_name}': {e}")
@@ -771,20 +766,17 @@ async def delete_pipeline(
     auth = state.get_http_auth()
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.delete(url, auth=auth) as response:
-                response_text = await response.text()
+        async with state.http_session.delete(url, auth=auth) as response:
+            response_text = await response.text()
 
-                if response.status == 200:
-                    return (
-                        f"Pipeline '{name}' (version: {version}) deleted successfully."
-                    )
-                else:
-                    error_detail = response_text if response_text else "No details"
-                    return (
-                        f"Error deleting pipeline (HTTP {response.status}): "
-                        f"{error_detail}"
-                    )
+            if response.status == 200:
+                return f"Pipeline '{name}' (version: {version}) deleted successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error deleting pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
 
     except aiohttp.ClientError as e:
         logger.error(f"HTTP error deleting pipeline '{name}': {e}")
@@ -800,7 +792,6 @@ def _register_prompts():
         template_content = template_data["template"]
         description = config.get("description", f"Prompt: {name}")
 
-        # Extract arguments from config
         args_config = config.get("arguments", [])
         arg_info = [
             (arg["name"], arg.get("description", ""), arg.get("required", False))
@@ -808,10 +799,15 @@ def _register_prompts():
             if isinstance(arg, dict) and "name" in arg
         ]
 
-        # Create a prompt function with proper signature using exec
-        # This is necessary because FastMCP inspects function signatures
+        invalid_args = [n for n, _, _ in arg_info if not n.isidentifier()]
+        if invalid_args:
+            logger.warning(
+                f"Skipping prompt '{name}': invalid argument names {invalid_args}"
+            )
+            continue
+
         arg_params = ", ".join(
-            f'{arg_name}: Annotated[str, "{arg_desc}"]'
+            f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
             for arg_name, arg_desc, _ in arg_info
         )
 
@@ -823,14 +819,11 @@ def prompt_fn({arg_params}) -> str:
         result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
     return result
 """
-        # Create the function in a namespace with access to template_content
         namespace = {"template_content": template_content, "Annotated": Annotated}
         exec(func_code, namespace)
         prompt_fn = namespace["prompt_fn"]
         prompt_fn.__doc__ = description
         prompt_fn.__name__ = name
-
-        # Use the decorator to register the prompt
         mcp.prompt(name=name, description=description)(prompt_fn)
 
 

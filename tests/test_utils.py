@@ -56,6 +56,55 @@ def test_templates_loader_basic():
     assert "{{ end_time }}" in tpl
 
 
+def test_template_variable_rendering():
+    """Test that template variables {{ key }} are correctly rendered."""
+    from typing import Annotated
+
+    templates = templates_loader()
+
+    # Test with pipeline_creator template which has variables
+    if "pipeline_creator" in templates:
+        template_data = templates["pipeline_creator"]
+        config = template_data["config"]
+        template_content = template_data["template"]
+
+        args_config = config.get("arguments", [])
+        arg_info = [
+            (arg["name"], arg.get("description", ""), arg.get("required", False))
+            for arg in args_config
+            if isinstance(arg, dict) and "name" in arg
+        ]
+
+        # Build the prompt function dynamically (same logic as server.py)
+        arg_params = ", ".join(
+            f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
+            for arg_name, arg_desc, _ in arg_info
+        )
+        arg_tuples = ", ".join(f'("{n}", {n})' for n, _, _ in arg_info)
+
+        func_code = f"""
+def prompt_fn({arg_params}) -> str:
+    result = template_content
+    for key, value in [{arg_tuples}]:
+        result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
+    return result
+"""
+        namespace = {"template_content": template_content, "Annotated": Annotated}
+        exec(func_code, namespace)
+        prompt_fn = namespace["prompt_fn"]
+
+        # Test rendering with sample values
+        result = prompt_fn(log_sample="test log line", pipeline_name="my_test_pipeline")
+
+        # Verify variables were replaced
+        assert "{{ log_sample }}" not in result, "log_sample variable was not replaced"
+        assert (
+            "{{ pipeline_name }}" not in result
+        ), "pipeline_name variable was not replaced"
+        assert "test log line" in result, "log_sample value not found in result"
+        assert "my_test_pipeline" in result, "pipeline_name value not found in result"
+
+
 def test_empty_queries():
     """Test empty queries"""
     assert security_gate("") == (True, "Empty query not allowed")
