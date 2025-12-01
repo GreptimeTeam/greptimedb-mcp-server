@@ -820,7 +820,7 @@ def _register_prompts():
 def prompt_fn({arg_params}) -> str:
     result = template_content
     for key, value in [{arg_tuples}]:
-        result = result.replace(f"{{{{{{ {{key}} }}}}}}", str(value))
+        result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
     return result
 """
         # Create the function in a namespace with access to template_content
