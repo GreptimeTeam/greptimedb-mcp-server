@@ -33,7 +33,8 @@ def setup_state():
         time_zone="",
         pool_size=5,
         http_port=4000,
-        mask_enabled=False,  # Disable masking for tests
+        http_protocol="http",
+        mask_enabled=False,
         mask_patterns="",
     )
     db_config = {

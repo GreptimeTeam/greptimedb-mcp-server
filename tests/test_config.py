@@ -17,6 +17,7 @@ def test_config_default_values():
             assert config.user == ""
             assert config.password == ""
             assert config.time_zone == ""
+            assert config.http_protocol == "http"
             assert config.mask_enabled is True
             assert config.mask_patterns == ""
 
@@ -32,6 +33,7 @@ def test_config_env_variables():
         "GREPTIMEDB_USER": "test_user",
         "GREPTIMEDB_PASSWORD": "test_password",
         "GREPTIMEDB_TIMEZONE": "test_tz",
+        "GREPTIMEDB_HTTP_PROTOCOL": "https",
         "GREPTIMEDB_MASK_ENABLED": "false",
         "GREPTIMEDB_MASK_PATTERNS": "phone,address",
     }
@@ -46,6 +48,7 @@ def test_config_env_variables():
             assert config.user == "test_user"
             assert config.password == "test_password"
             assert config.time_zone == "test_tz"
+            assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "phone,address"
 
@@ -68,6 +71,8 @@ def test_config_cli_arguments():
         "cli_password",
         "--timezone",
         "cli_tz",
+        "--http-protocol",
+        "https",
         "--mask-enabled",
         "false",
         "--mask-patterns",
@@ -84,6 +89,7 @@ def test_config_cli_arguments():
             assert config.user == "cli_user"
             assert config.password == "cli_password"
             assert config.time_zone == "cli_tz"
+            assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "custom1,custom2"
 
@@ -99,6 +105,7 @@ def test_config_precedence():
         "GREPTIMEDB_USER": "env_user",
         "GREPTIMEDB_PASSWORD": "env_password",
         "GREPTIMEDB_TIMEZONE": "env_tz",
+        "GREPTIMEDB_HTTP_PROTOCOL": "http",
         "GREPTIMEDB_MASK_ENABLED": "true",
         "GREPTIMEDB_MASK_PATTERNS": "env_pattern",
     }
@@ -117,6 +124,8 @@ def test_config_precedence():
         "cli_password",
         "--timezone",
         "cli_tz",
+        "--http-protocol",
+        "https",
         "--mask-enabled",
         "false",
         "--mask-patterns",
@@ -133,5 +142,6 @@ def test_config_precedence():
             assert config.user == "cli_user"
             assert config.password == "cli_password"
             assert config.time_zone == "cli_tz"
+            assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "cli_pattern"

@@ -116,7 +116,7 @@ async def lifespan(mcp: FastMCP):
             p.strip() for p in config.mask_patterns.split(",") if p.strip()
         ]
 
-    http_base_url = f"http://{config.host}:{config.http_port}"
+    http_base_url = f"{config.http_protocol}://{config.host}:{config.http_port}"
 
     _state = AppState(
         db_config=db_config,

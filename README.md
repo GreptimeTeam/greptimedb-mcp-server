@@ -167,16 +167,17 @@ python -m greptimedb_mcp_server.server
 Set the following environment variables:
 
 ```bash
-GREPTIMEDB_HOST=localhost    # Database host
-GREPTIMEDB_PORT=4002         # Optional: Database MySQL port (defaults to 4002 if not specified)
-GREPTIMEDB_HTTP_PORT=4000    # Optional: HTTP API port for pipeline management (defaults to 4000)
+GREPTIMEDB_HOST=localhost      # Database host
+GREPTIMEDB_PORT=4002           # Optional: Database MySQL port (defaults to 4002)
+GREPTIMEDB_HTTP_PORT=4000      # Optional: HTTP API port for pipeline management (defaults to 4000)
+GREPTIMEDB_HTTP_PROTOCOL=http  # Optional: HTTP protocol (http or https, defaults to http)
 GREPTIMEDB_USER=root
 GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
 GREPTIMEDB_TIMEZONE=UTC
-GREPTIMEDB_POOL_SIZE=5       # Optional: Connection pool size (defaults to 5)
-GREPTIMEDB_MASK_ENABLED=true # Optional: Enable data masking (defaults to true)
-GREPTIMEDB_MASK_PATTERNS=    # Optional: Additional sensitive column patterns (comma-separated)
+GREPTIMEDB_POOL_SIZE=5         # Optional: Connection pool size (defaults to 5)
+GREPTIMEDB_MASK_ENABLED=true   # Optional: Enable data masking (defaults to true)
+GREPTIMEDB_MASK_PATTERNS=      # Optional: Additional sensitive column patterns (comma-separated)
 ```
 
 Or via command-line args:
@@ -184,6 +185,7 @@ Or via command-line args:
 * `--host` the database host, `localhost` by default,
 * `--port` the database port, must be MySQL protocol port,  `4002` by default,
 * `--http-port` the HTTP API port for pipeline management, `4000` by default,
+* `--http-protocol` the HTTP protocol for API calls (http or https), `http` by default,
 * `--user` the database username, empty by default,
 * `--password` the database password, empty by default,
 * `--database` the database name, `public` by default,
