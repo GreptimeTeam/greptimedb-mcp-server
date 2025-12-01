@@ -1,0 +1,16 @@
+description: "Generate GreptimeDB pipeline YAML configuration from log samples."
+version: "1.0"
+arguments:
+  - name: "log_sample"
+    description: "One or more lines of log sample (real or sanitized)"
+    required: true
+  - name: "pipeline_name"
+    description: "Name for the pipeline"
+    required: true
+metadata:
+  tags:
+    - pipeline
+    - logs
+    - ingestion
+  suggested_use: "Generate pipeline configuration from log samples for GreptimeDB log ingestion"
+  output_format: "yaml"

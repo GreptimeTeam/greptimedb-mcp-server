@@ -24,10 +24,95 @@ This server enables AI assistants to query and analyze GreptimeDB through SQL, T
 | `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
 | `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
 | `explain_query` | Analyze SQL or TQL query execution plans |
+| `list_pipelines` | List all pipelines or get details of a specific pipeline |
+| `create_pipeline` | Create a new pipeline with YAML configuration |
+| `dryrun_pipeline` | Test a pipeline with sample data without writing to database |
+| `delete_pipeline` | Delete a specific version of a pipeline |
 
 ## Prompts
+
+MCP prompt system APIs:
 - **list_prompts** - List available prompt templates
 - **get_prompt** - Get a prompt template by name with argument substitution
+
+Available prompt templates:
+
+| Prompt | Description |
+|--------|-------------|
+| `pipeline_creator` | Generate GreptimeDB pipeline YAML configuration from log samples |
+| `log_pipeline` | Log analysis with full-text search and aggregation |
+| `metrics_analysis` | Comprehensive metrics analysis for monitoring data |
+| `promql_analysis` | PromQL-style queries using GreptimeDB TQL EVAL syntax |
+| `iot_monitoring` | IoT device monitoring with TAG/FIELD semantics and device aggregation |
+| `trace_analysis` | Distributed trace analysis for OpenTelemetry spans |
+| `table_operation` | Table diagnostics: schema, region health, storage analysis, and query optimization |
+
+### Using Prompts in Claude Desktop
+
+In Claude Desktop, MCP prompts need to be added manually to your conversation:
+
+1. Click the **+** button in the conversation input area
+2. Select **MCP Server**
+3. Choose **Prompt/References**
+4. Select the prompt you want to use (e.g., `pipeline_creator`)
+5. Fill in the required arguments
+
+Note: Prompts are not automatically available via `/` slash commands in Claude Desktop. You must add them through the UI as described above.
+
+### LLM Instructions
+
+Add this to your system prompt or custom instructions to help AI assistants use this MCP server effectively:
+
+```
+You have access to a GreptimeDB MCP server for querying and managing time-series data, logs, and metrics.
+
+## Available Tools
+- `execute_sql`: Run SQL queries (SELECT, SHOW, DESCRIBE only - read-only access)
+- `execute_tql`: Run PromQL-compatible time-series queries
+- `query_range`: Time-window aggregation with RANGE/ALIGN syntax
+- `describe_table`: Get table schema information
+- `health_check`: Check database connection status
+- `explain_query`: Analyze query execution plans
+
+### Pipeline Management
+- `list_pipelines`: View existing log pipelines
+- `create_pipeline`: Create/update pipeline with YAML config (same name creates new version)
+- `dryrun_pipeline`: Test pipeline with sample data without writing
+- `delete_pipeline`: Remove a pipeline version
+
+**Note**: All HTTP API calls (pipeline tools) require authentication. The MCP server handles auth automatically using configured credentials. When providing curl examples to users, always include `-u <username>:<password>`.
+
+## Available Prompts
+Use these prompts for specialized tasks:
+- `pipeline_creator`: Generate pipeline YAML from log samples - use when user provides log examples
+- `log_pipeline`: Log analysis with full-text search
+- `metrics_analysis`: Metrics monitoring and analysis
+- `promql_analysis`: PromQL-style queries
+- `iot_monitoring`: IoT device data analysis
+- `trace_analysis`: Distributed tracing analysis
+- `table_operation`: Table diagnostics and optimization
+
+## Workflow Tips
+1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `create_pipeline` → `dryrun_pipeline` to verify
+2. For data analysis: `describe_table` first → understand schema → `execute_sql` or `execute_tql`
+3. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
+4. Always check `health_check` if queries fail unexpectedly
+```
+
+### Example: Creating a Pipeline
+
+Ask Claude to help create a pipeline by providing your log sample:
+
+```
+Help me create a GreptimeDB pipeline to parse this nginx log:
+127.0.0.1 - - [25/May/2024:20:16:37 +0000] "GET /index.html HTTP/1.1" 200 612 "-" "Mozilla/5.0..."
+```
+
+Claude will:
+1. Analyze your log format
+2. Generate a pipeline YAML configuration
+3. Create the pipeline using `create_pipeline` tool
+4. Test it with `dryrun_pipeline` tool
 
 ## Security
 All queries pass through a security gate that:
@@ -84,6 +169,7 @@ Set the following environment variables:
 ```bash
 GREPTIMEDB_HOST=localhost    # Database host
 GREPTIMEDB_PORT=4002         # Optional: Database MySQL port (defaults to 4002 if not specified)
+GREPTIMEDB_HTTP_PORT=4000    # Optional: HTTP API port for pipeline management (defaults to 4000)
 GREPTIMEDB_USER=root
 GREPTIMEDB_PASSWORD=
 GREPTIMEDB_DATABASE=public
@@ -97,6 +183,7 @@ Or via command-line args:
 
 * `--host` the database host, `localhost` by default,
 * `--port` the database port, must be MySQL protocol port,  `4002` by default,
+* `--http-port` the HTTP API port for pipeline management, `4000` by default,
 * `--user` the database username, empty by default,
 * `--password` the database password, empty by default,
 * `--database` the database name, `public` by default,
@@ -164,6 +251,43 @@ Analyze query execution plan:
 ### health_check
 Check database connection (no parameters required).
 
+### Pipeline Management
+
+#### list_pipelines
+List all pipelines or filter by name:
+```json
+{
+  "name": "my_pipeline"
+}
+```
+
+#### create_pipeline
+Create a new pipeline with YAML configuration:
+```json
+{
+  "name": "nginx_logs",
+  "pipeline": "version: 2\nprocessors:\n  - dissect:\n      fields:\n        - message\n      patterns:\n        - '%{ip} - - [%{timestamp}] \"%{method} %{path}\"'\n      ignore_missing: true\n  - date:\n      fields:\n        - timestamp\n      formats:\n        - '%d/%b/%Y:%H:%M:%S %z'\n\ntransform:\n  - fields:\n      - ip\n    type: string\n    index: inverted\n  - fields:\n      - timestamp\n    type: time\n    index: timestamp"
+}
+```
+
+#### dryrun_pipeline
+Test a pipeline with sample data (no actual write):
+```json
+{
+  "pipeline_name": "nginx_logs",
+  "data": "{\"message\": \"127.0.0.1 - - [25/May/2024:20:16:37 +0000] \\\"GET /index.html\\\"\"}"
+}
+```
+
+#### delete_pipeline
+Delete a specific version of a pipeline:
+```json
+{
+  "name": "nginx_logs",
+  "version": "2024-06-27 12:02:34.257312110Z"
+}
+```
+
 ## Claude Desktop Integration
 
 Configure the MCP server in Claude Desktop's configuration file:
@@ -215,6 +339,7 @@ Location: `%APPDATA%/Claude/claude_desktop_config.json`
         "GREPTIMEDB_DATABASE": "public",
         "GREPTIMEDB_TIMEZONE": "",
         "GREPTIMEDB_POOL_SIZE": "5",
+        "GREPTIMEDB_HTTP_PORT": "4000",
         "GREPTIMEDB_MASK_ENABLED": "true",
         "GREPTIMEDB_MASK_PATTERNS": ""
       }

@@ -43,6 +43,9 @@ class MockCursor:
                 ("2024-01-01 00:00:00", "host1", 45.5),
                 ("2024-01-01 00:05:00", "host1", 52.3),
             ]
+        elif "GREPTIME_PRIVATE.PIPELINES" in self.query.upper():
+            # Pipeline list query - returns empty by default
+            self._results = []
         elif "SELECT" in self.query.upper():
             self._results = [(1, "John"), (2, "Jane")]
         else:
@@ -90,6 +93,8 @@ class MockCursor:
             return [("plan", None)]
         elif "ALIGN" in self.query.upper():
             return [("ts", None), ("host", None), ("avg_cpu", None)]
+        elif "GREPTIME_PRIVATE.PIPELINES" in self.query.upper():
+            return [("name", None), ("pipeline", None), ("version", None)]
         elif "SELECT" in self.query.upper():
             return [("id", None), ("name", None)]
         return []
