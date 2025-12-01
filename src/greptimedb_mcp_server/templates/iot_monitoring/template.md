@@ -72,3 +72,11 @@ FROM {{ table }}
 GROUP BY device_id
 HAVING MAX(ts) < now() - INTERVAL '5 minutes';
 ```
+
+## References
+
+- [Data Model](https://docs.greptime.com/user-guide/concepts/data-model) - Tag, Field, and Timestamp concepts
+- [CREATE TABLE](https://docs.greptime.com/reference/sql/create) - Table creation with TAG/FIELD semantics
+- [RANGE Query](https://docs.greptime.com/reference/sql/range) - Time-window aggregation for sensor data
+- [SQL Functions](https://docs.greptime.com/reference/sql/functions/overview) - Aggregation functions (AVG, MAX, STDDEV)
+- [Table Design Best Practices](https://docs.greptime.com/user-guide/deployments-administration/performance-tuning/design-table/) - Optimal schema design for IoT

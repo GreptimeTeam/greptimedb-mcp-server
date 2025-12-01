@@ -32,33 +32,31 @@ FROM INFORMATION_SCHEMA.REGION_PEERS
 WHERE table_name = '{{ table }}';
 
 -- Region statistics (rows, disk usage)
-SELECT r.region_id, r.disk_size, r.memtable_size, r.num_rows
+SELECT r.region_id, r.disk_size, r.memtable_size, r.region_rows
 FROM INFORMATION_SCHEMA.REGION_STATISTICS r
 JOIN INFORMATION_SCHEMA.TABLES t ON r.table_id = t.table_id
 WHERE t.table_name = '{{ table }}';
 
--- Find unhealthy regions
-SELECT region_id, peer_id, status
+-- Find unhealthy regions (status should be ALIVE)
+SELECT region_id, peer_id, status, down_seconds
 FROM INFORMATION_SCHEMA.REGION_PEERS
-WHERE table_name = '{{ table }}' AND status != 'READY';
+WHERE table_name = '{{ table }}' AND status != 'ALIVE';
 ```
 
 ## Storage Analysis
 
 ```sql
--- SST file details
-SELECT file_id, file_size, num_rows, min_ts, max_ts
-FROM INFORMATION_SCHEMA.GREPTIME_REGION_PEERS p
-JOIN INFORMATION_SCHEMA.SSTS_MANIFEST s ON p.region_id = s.region_id
-WHERE p.table_name = '{{ table }}';
+-- SST file details for the table
+SELECT s.file_id, s.file_size, s.num_rows, s.min_ts, s.max_ts, s.level
+FROM INFORMATION_SCHEMA.SSTS_MANIFEST s
+JOIN INFORMATION_SCHEMA.TABLES t ON s.table_id = t.table_id
+WHERE t.table_name = '{{ table }}';
 
--- Index information
-SELECT index_file_path, index_type, index_file_size
-FROM INFORMATION_SCHEMA.SSTS_INDEX_META
-WHERE region_id IN (
-    SELECT region_id FROM INFORMATION_SCHEMA.REGION_PEERS
-    WHERE table_name = '{{ table }}'
-);
+-- Index information for the table
+SELECT i.index_file_path, i.index_type, i.index_file_size, i.target_json
+FROM INFORMATION_SCHEMA.SSTS_INDEX_META i
+JOIN INFORMATION_SCHEMA.TABLES t ON i.table_id = t.table_id
+WHERE t.table_name = '{{ table }}';
 ```
 
 ## Query Optimization
@@ -82,10 +80,19 @@ explain_query(query="SELECT * FROM {{ table }} LIMIT 100", analyze=true)
 
 ```sql
 -- Node topology
-SELECT peer_id, peer_type, peer_addr, node_status
+SELECT peer_id, peer_type, peer_addr, version, uptime, node_status
 FROM INFORMATION_SCHEMA.CLUSTER_INFO;
 
 -- Running queries
 SELECT id, query, start_timestamp, elapsed_time
 FROM INFORMATION_SCHEMA.PROCESSLIST;
 ```
+
+## References
+
+- [INFORMATION_SCHEMA](https://docs.greptime.com/reference/sql/information-schema/overview) - System tables overview
+- [CLUSTER_INFO](https://docs.greptime.com/reference/sql/information-schema/cluster-info) - Node topology and status
+- [REGION_PEERS](https://docs.greptime.com/reference/sql/information-schema/region-peers) - Region distribution and health
+- [REGION_STATISTICS](https://docs.greptime.com/reference/sql/information-schema/region-statistics) - Region disk and memory usage
+- [EXPLAIN Query](https://docs.greptime.com/reference/sql/explain) - Query execution plan analysis
+- [SHOW Statements](https://docs.greptime.com/reference/sql/show) - SHOW CREATE TABLE and other statements

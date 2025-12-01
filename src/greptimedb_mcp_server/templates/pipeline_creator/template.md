@@ -189,7 +189,7 @@ Pattern: `%{timestamp} %{hostname} %{app}[%{pid}]: %{message}`
 | Index Type | When to Use | Supported Operations | Storage Overhead |
 |------------|-------------|---------------------|------------------|
 | `inverted` | Low-cardinality fields for filtering | `=`, `!=`, `IN`, `BETWEEN`, `>`, `<` | Medium-High |
-| `fulltext` | Unstructured text needing tokenized search | `MATCHES` (full-text search) | High |
+| `fulltext` | Unstructured text needing tokenized search | `@@` or `matches_term()` | High |
 | `skipping` | High-cardinality fields (e.g., `request_id`) | `=` only | Low |
 
 **Guidelines:**
@@ -292,3 +292,11 @@ transform:
     type: time
     index: timestamp
 ```
+
+## References
+
+- [Pipeline Configuration Reference](https://docs.greptime.com/reference/pipeline/pipeline-config/) - Complete pipeline syntax and processors
+- [Manage Pipelines](https://docs.greptime.com/user-guide/logs/manage-pipelines) - Create, update, and delete pipelines
+- [Data Index](https://docs.greptime.com/user-guide/manage-data/data-index) - Index types and selection guide
+- [Table Design Best Practices](https://docs.greptime.com/user-guide/deployments-administration/performance-tuning/design-table/) - Tag and index selection
+- [Logs Overview](https://docs.greptime.com/user-guide/logs/overview) - Log data model and concepts

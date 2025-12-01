@@ -59,3 +59,9 @@ histogram_quantile(0.99, rate({{ metric }}_bucket[5m])) > 0.5
 - Use `execute_tql` tool with: query, start, end, step (required), lookback (optional)
 - Label matchers: `=`, `!=`, `=~` (regex), `!~`
 - Time durations: s, m, h, d, w
+
+## References
+
+- [TQL (PromQL) Reference](https://docs.greptime.com/reference/sql/tql) - TQL EVAL syntax and supported functions
+- [PromQL Query Guide](https://docs.greptime.com/user-guide/query-data/promql) - PromQL query patterns and examples
+- [Time Durations](https://docs.greptime.com/reference/time-durations) - Time duration format reference

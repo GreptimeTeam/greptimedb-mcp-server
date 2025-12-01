@@ -52,3 +52,10 @@ ORDER BY ts DESC LIMIT 50;
 - Use `column @@ 'term'` or `matches_term(column, 'term')` for full-text search
 - Requires FULLTEXT index on the column
 - Common log columns: ts, level, service, message, trace_id
+
+## References
+
+- [Full-Text Search](https://docs.greptime.com/user-guide/logs/fulltext-search) - Full-text search syntax and operators
+- [Log Query](https://docs.greptime.com/user-guide/query-data/log-query) - Log query patterns and examples
+- [SQL SELECT](https://docs.greptime.com/reference/sql/select) - SQL SELECT syntax reference
+- [SQL Functions](https://docs.greptime.com/reference/sql/functions/overview) - Available SQL functions

@@ -50,3 +50,11 @@ SELECT ts, value FROM your_table, stats
 WHERE ts >= '{{ start_time }}' AND ts < '{{ end_time }}'
   AND (value > m + 2*s OR value < m - 2*s);
 ```
+
+## References
+
+- [SQL Query](https://docs.greptime.com/user-guide/query-data/sql) - SQL query syntax and examples
+- [RANGE Query](https://docs.greptime.com/reference/sql/range) - Time-window aggregation with RANGE/ALIGN
+- [SQL Functions](https://docs.greptime.com/reference/sql/functions/overview) - Aggregation and mathematical functions
+- [Common Table Expressions](https://docs.greptime.com/user-guide/query-data/cte) - CTE syntax for complex queries
+- [Data Model](https://docs.greptime.com/user-guide/concepts/data-model) - Tag, Field, and Timestamp concepts
