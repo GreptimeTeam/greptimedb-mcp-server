@@ -44,6 +44,16 @@ class Config:
     Connection pool size
     """
 
+    http_port: int
+    """
+    GreptimeDB HTTP API port
+    """
+
+    http_protocol: str
+    """
+    HTTP protocol (http or https)
+    """
+
     mask_enabled: bool
     """
     Enable data masking for sensitive columns
@@ -111,6 +121,21 @@ class Config:
         )
 
         parser.add_argument(
+            "--http-port",
+            type=int,
+            help="GreptimeDB HTTP API port (default: 4000)",
+            default=int(os.getenv("GREPTIMEDB_HTTP_PORT", "4000")),
+        )
+
+        parser.add_argument(
+            "--http-protocol",
+            type=str,
+            choices=["http", "https"],
+            help="HTTP protocol for API calls (default: http)",
+            default=os.getenv("GREPTIMEDB_HTTP_PROTOCOL", "http"),
+        )
+
+        parser.add_argument(
             "--mask-enabled",
             type=lambda x: x.lower() not in ("false", "0", "no"),
             help="Enable data masking for sensitive columns (default: true)",
@@ -133,6 +158,8 @@ class Config:
             password=args.password,
             time_zone=args.timezone,
             pool_size=args.pool_size,
+            http_port=args.http_port,
+            http_protocol=args.http_protocol,
             mask_enabled=args.mask_enabled,
             mask_patterns=args.mask_patterns,
         )

@@ -19,8 +19,11 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Annotated
+from urllib.parse import quote
 
+import aiohttp
 from mcp.server.fastmcp import FastMCP
 from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
@@ -44,9 +47,11 @@ class AppState:
     db_config: dict
     pool_config: dict
     templates: dict
+    http_base_url: str
     mask_enabled: bool = True
     mask_patterns: list[str] = field(default_factory=list)
     pool: MySQLConnectionPool | None = field(default=None)
+    http_session: aiohttp.ClientSession | None = field(default=None)
 
     def get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
@@ -62,6 +67,14 @@ class AppState:
         except Error as e:
             logger.warning(f"Failed to get pool connection, using direct: {e}")
             return connect(**self.db_config)
+
+    def get_http_auth(self) -> aiohttp.BasicAuth | None:
+        """Get HTTP Basic Auth if credentials are configured."""
+        user = self.db_config.get("user", "")
+        password = self.db_config.get("password", "")
+        if user:
+            return aiohttp.BasicAuth(user, password)
+        return None
 
 
 # Global state (initialized in lifespan)
@@ -103,21 +116,28 @@ async def lifespan(mcp: FastMCP):
             p.strip() for p in config.mask_patterns.split(",") if p.strip()
         ]
 
+    http_base_url = f"{config.http_protocol}://{config.host}:{config.http_port}"
+
     _state = AppState(
         db_config=db_config,
         pool_config=pool_config,
         templates=templates_loader(),
+        http_base_url=http_base_url,
         mask_enabled=config.mask_enabled,
         mask_patterns=mask_patterns,
+        http_session=aiohttp.ClientSession(),
     )
 
     logger.info(f"GreptimeDB Config: {db_config}")
     logger.info(f"Data masking: {'enabled' if config.mask_enabled else 'disabled'}")
     logger.info("Starting GreptimeDB MCP server...")
 
-    yield _state
-
-    logger.info("Shutting down GreptimeDB MCP server...")
+    try:
+        yield _state
+    finally:
+        logger.info("Shutting down GreptimeDB MCP server...")
+        if _state.http_session:
+            await _state.http_session.close()
 
 
 mcp = FastMCP(
@@ -559,6 +579,211 @@ async def read_table_resource(table: str) -> str:
         raise RuntimeError(f"Database error: {str(e)}")
 
 
+PIPELINE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _validate_pipeline_name(name: str) -> str:
+    """Validate pipeline name format."""
+    if not name:
+        raise ValueError("Pipeline name is required")
+    if not PIPELINE_NAME_PATTERN.match(name):
+        raise ValueError(
+            "Invalid pipeline name: must start with letter or underscore, "
+            "contain only alphanumeric characters and underscores"
+        )
+    return name
+
+
+def _format_pipeline_version(ns_timestamp: int) -> str:
+    """Convert nanosecond timestamp to HTTP API version format (UTC)."""
+    seconds = ns_timestamp // 1_000_000_000
+    nanoseconds = ns_timestamp % 1_000_000_000
+    dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    return f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{nanoseconds:09d}"
+
+
+@mcp.tool()
+async def list_pipelines(
+    name: Annotated[str | None, "Optional pipeline name to filter by"] = None,
+) -> str:
+    """List all pipelines or get details of a specific pipeline."""
+    state = get_state()
+
+    if name:
+        query = (
+            "SELECT name, pipeline, created_at::bigint as version "
+            "FROM greptime_private.pipelines WHERE name = %s"
+        )
+        params = (name,)
+    else:
+        query = (
+            "SELECT name, pipeline, created_at::bigint as version "
+            "FROM greptime_private.pipelines"
+        )
+        params = ()
+
+    def _sync_list():
+        with state.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                return columns, rows
+
+    try:
+        columns, rows = await asyncio.to_thread(_sync_list)
+        if not rows:
+            return "No pipelines found."
+
+        version_idx = columns.index("version")
+        converted_rows = []
+        for row in rows:
+            row_list = list(row)
+            if row_list[version_idx] is not None:
+                row_list[version_idx] = _format_pipeline_version(row_list[version_idx])
+            converted_rows.append(tuple(row_list))
+
+        result = format_results(
+            columns,
+            converted_rows,
+            "markdown",
+            mask_enabled=False,
+            mask_patterns=[],
+        )
+        return result
+
+    except Error as e:
+        logger.error(f"Error listing pipelines: {e}")
+        return f"Error listing pipelines: {str(e)}"
+
+
+@mcp.tool()
+async def create_pipeline(
+    name: Annotated[str, "Name of the pipeline to create"],
+    pipeline: Annotated[str, "Pipeline configuration in YAML format"],
+) -> str:
+    """Create a new pipeline in GreptimeDB."""
+    state = get_state()
+    name = _validate_pipeline_name(name)
+
+    url = f"{state.http_base_url}/v1/pipelines/{quote(name)}"
+    auth = state.get_http_auth()
+
+    try:
+        async with state.http_session.post(
+            url,
+            data=pipeline,
+            headers={"Content-Type": "application/x-yaml"},
+            auth=auth,
+        ) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                try:
+                    result = json.loads(response_text)
+                    pipelines = result.get("pipelines", [])
+                    version = pipelines[0]["version"] if pipelines else "unknown"
+                    return (
+                        f"Pipeline '{name}' created successfully.\n"
+                        f"Version: {version}"
+                    )
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    return f"Pipeline '{name}' created successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error creating pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error creating pipeline '{name}': {e}")
+        return f"Error creating pipeline: {str(e)}"
+
+
+@mcp.tool()
+async def dryrun_pipeline(
+    pipeline_name: Annotated[str, "Name of the pipeline to test"],
+    data: Annotated[str, "Test data in JSON format (single object or array)"],
+) -> str:
+    """Test a pipeline with sample data without writing to the database."""
+    state = get_state()
+    pipeline_name = _validate_pipeline_name(pipeline_name)
+
+    try:
+        parsed = json.loads(data)
+        normalized_data = json.dumps(parsed, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid JSON data: {str(e)}"
+
+    url = f"{state.http_base_url}/v1/pipelines/_dryrun"
+    request_body = {
+        "pipeline_name": pipeline_name,
+        "data": normalized_data,
+    }
+    auth = state.get_http_auth()
+    logger.debug(f"Dryrun request URL: {url}")
+    logger.debug(f"Dryrun request body: {request_body}")
+
+    try:
+        async with state.http_session.post(
+            url,
+            json=request_body,
+            auth=auth,
+        ) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                try:
+                    result = json.loads(response_text)
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    return response_text
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error testing pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error testing pipeline '{pipeline_name}': {e}")
+        return f"Error testing pipeline: {str(e)}"
+
+
+@mcp.tool()
+async def delete_pipeline(
+    name: Annotated[str, "Name of the pipeline to delete"],
+    version: Annotated[str, "Version of the pipeline to delete (timestamp)"],
+) -> str:
+    """Delete a specific version of a pipeline from GreptimeDB."""
+    state = get_state()
+    name = _validate_pipeline_name(name)
+
+    if not version:
+        return "Error: version is required to delete a pipeline"
+
+    url = f"{state.http_base_url}/v1/pipelines/{quote(name)}?version={quote(version)}"
+    auth = state.get_http_auth()
+
+    try:
+        async with state.http_session.delete(url, auth=auth) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                return f"Pipeline '{name}' (version: {version}) deleted successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error deleting pipeline (HTTP {response.status}): "
+                    f"{error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error deleting pipeline '{name}': {e}")
+        return f"Error deleting pipeline: {str(e)}"
+
+
 def _register_prompts():
     """Register prompts from templates."""
     templates = templates_loader()
@@ -568,31 +793,38 @@ def _register_prompts():
         template_content = template_data["template"]
         description = config.get("description", f"Prompt: {name}")
 
-        # Extract argument names from config
-        arg_names = [
-            arg["name"]
-            for arg in config.get("arguments", [])
+        args_config = config.get("arguments", [])
+        arg_info = [
+            (arg["name"], arg.get("description", ""), arg.get("required", False))
+            for arg in args_config
             if isinstance(arg, dict) and "name" in arg
         ]
 
-        # Create a prompt function dynamically
-        def make_prompt_fn(tpl_content, arg_list):
-            def prompt_fn(**kwargs) -> str:
-                result = tpl_content
-                for key, value in kwargs.items():
-                    result = result.replace(f"{{{{ {key} }}}}", str(value))
-                return result
+        invalid_args = [n for n, _, _ in arg_info if not n.isidentifier()]
+        if invalid_args:
+            logger.warning(
+                f"Skipping prompt '{name}': invalid argument names {invalid_args}"
+            )
+            continue
 
-            # Set function signature for FastMCP to detect arguments
-            prompt_fn.__annotations__ = {arg: str for arg in arg_list}
-            prompt_fn.__annotations__["return"] = str
-            return prompt_fn
+        arg_params = ", ".join(
+            f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
+            for arg_name, arg_desc, _ in arg_info
+        )
 
-        prompt_fn = make_prompt_fn(template_content, arg_names)
+        arg_tuples = ", ".join(f'("{n}", {n})' for n, _, _ in arg_info)
+        func_code = f"""
+def prompt_fn({arg_params}) -> str:
+    result = template_content
+    for key, value in [{arg_tuples}]:
+        result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
+    return result
+"""
+        namespace = {"template_content": template_content, "Annotated": Annotated}
+        exec(func_code, namespace)
+        prompt_fn = namespace["prompt_fn"]
         prompt_fn.__doc__ = description
         prompt_fn.__name__ = name
-
-        # Use the decorator to register the prompt
         mcp.prompt(name=name, description=description)(prompt_fn)
 
 

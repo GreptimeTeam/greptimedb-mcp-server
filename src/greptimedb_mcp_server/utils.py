@@ -28,16 +28,16 @@ def security_gate(query: str) -> tuple[bool, str]:
     clean_query = re.sub(r"\s+", " ", clean_query).strip().upper()
 
     dangerous_patterns = [
-        # DDL/DML operations
-        (r"\bDROP\b", "Forbidden `DROP` operation"),
+        # DDL/DML operations (must be at start, not in SHOW CREATE TABLE etc.)
+        (r"^\s*DROP\b", "Forbidden `DROP` operation"),
         (r"\bDELETE\b", "Forbidden `DELETE` operation"),
         (r"\bREVOKE\b", "Forbidden `REVOKE` operation"),
         (r"\bTRUNCATE\b", "Forbidden `TRUNCATE` operation"),
         (r"\bUPDATE\b", "Forbidden `UPDATE` operation"),
         (r"\bINSERT\b", "Forbidden `INSERT` operation"),
-        (r"\bALTER\b", "Forbidden `ALTER` operation"),
-        (r"\bCREATE\b", "Forbidden `CREATE` operation"),
-        (r"\bGRANT\b", "Forbidden `GRANT` operation"),
+        (r"^\s*ALTER\b", "Forbidden `ALTER` operation"),
+        (r"^\s*CREATE\b", "Forbidden `CREATE` operation"),
+        (r"^\s*GRANT\b", "Forbidden `GRANT` operation"),
         # Dynamic SQL execution
         (r"\b(?:EXEC|EXECUTE)\b", "Dynamic SQL execution not allowed"),
         (r"\bCALL\b", "Stored procedure calls not allowed"),

@@ -4,15 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "greptimedb-mcp-server"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP server for GreptimeDB with SQL/TQL/PromQL support, sensitive data masking, and prompt templates for observability data analysis."
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
     "mysql-connector-python>=9.1.0",
     "pyyaml>=6.0.2",
+    "aiohttp>=3.9.0",
 ]
 
 [[project.authors]]

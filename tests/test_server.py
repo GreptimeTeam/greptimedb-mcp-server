@@ -12,6 +12,11 @@ from greptimedb_mcp_server.server import (
     query_range,
     explain_query,
     read_table_resource,
+    list_pipelines,
+    create_pipeline,
+    dryrun_pipeline,
+    delete_pipeline,
+    _validate_pipeline_name,
 )
 from greptimedb_mcp_server.utils import templates_loader
 
@@ -27,7 +32,9 @@ def setup_state():
         database="testdb",
         time_zone="",
         pool_size=5,
-        mask_enabled=False,  # Disable masking for tests
+        http_port=4000,
+        http_protocol="http",
+        mask_enabled=False,
         mask_patterns="",
     )
     db_config = {
@@ -49,6 +56,7 @@ def setup_state():
         db_config=db_config,
         pool_config=pool_config,
         templates=templates_loader(),
+        http_base_url=f"http://{config.host}:{config.http_port}",
         mask_enabled=config.mask_enabled,
         mask_patterns=[],
     )
@@ -505,3 +513,86 @@ async def test_query_range_schema_qualified_table():
     data = json.loads(result)
     assert "query" in data
     assert "public.metrics" in data["query"]
+
+
+# Pipeline tools tests
+
+
+def test_validate_pipeline_name_valid():
+    """Test valid pipeline names"""
+    assert _validate_pipeline_name("test_pipeline") == "test_pipeline"
+    assert _validate_pipeline_name("Pipeline1") == "Pipeline1"
+    assert _validate_pipeline_name("_private") == "_private"
+    assert _validate_pipeline_name("a") == "a"
+
+
+def test_validate_pipeline_name_invalid():
+    """Test invalid pipeline names"""
+    with pytest.raises(ValueError) as excinfo:
+        _validate_pipeline_name("")
+    assert "Pipeline name is required" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_pipeline_name("123invalid")
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_pipeline_name("test-pipeline")
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_pipeline_name("test.pipeline")
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines():
+    """Test list_pipelines tool"""
+    result = await list_pipelines()
+    # Since we're using mocked DB, check for expected output format
+    assert "No pipelines found." in result or "name" in result
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_with_name():
+    """Test list_pipelines with specific name filter"""
+    result = await list_pipelines(name="test_pipeline")
+    assert "No pipelines found." in result or "name" in result
+
+
+@pytest.mark.asyncio
+async def test_create_pipeline_invalid_name():
+    """Test create_pipeline with invalid name"""
+    with pytest.raises(ValueError) as excinfo:
+        await create_pipeline(name="123-invalid", pipeline="version: 2")
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_dryrun_pipeline_invalid_name():
+    """Test dryrun_pipeline with invalid name"""
+    with pytest.raises(ValueError) as excinfo:
+        await dryrun_pipeline(pipeline_name="123-invalid", data='{"message": "test"}')
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_dryrun_pipeline_invalid_json():
+    """Test dryrun_pipeline with invalid JSON data"""
+    result = await dryrun_pipeline(pipeline_name="test_pipeline", data="invalid json")
+    assert "Error: Invalid JSON data" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_pipeline_invalid_name():
+    """Test delete_pipeline with invalid name"""
+    with pytest.raises(ValueError) as excinfo:
+        await delete_pipeline(name="123-invalid", version="2024-01-01")
+    assert "Invalid pipeline name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_delete_pipeline_missing_version():
+    """Test delete_pipeline with missing version"""
+    result = await delete_pipeline(name="test_pipeline", version="")
+    assert "Error: version is required" in result
