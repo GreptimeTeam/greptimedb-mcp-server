@@ -231,10 +231,10 @@ curl -X POST "http://localhost:4000/v1/pipelines/my_pipeline" \
   -d @pipeline.yaml
 
 # Dryrun pipeline
-curl -X POST "http://localhost:4000/v1/pipelines/dryrun?pipeline_name=my_pipeline" \
+curl -X POST "http://localhost:4000/v1/pipelines/_dryrun" \
   -u "<username>:<password>" \
   -H "Content-Type: application/json" \
-  -d '{"message": "test log entry"}'
+  -d '{"pipeline_name": "my_pipeline", "data": "{\"message\": \"test log entry\"}"}'
 
 # Delete pipeline
 curl -X DELETE "http://localhost:4000/v1/pipelines/my_pipeline?version=<version>" \
