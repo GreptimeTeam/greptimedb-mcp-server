@@ -93,7 +93,6 @@ transform:
       - ip_address
     type: string
     index: inverted  # for equality queries
-    tag: true        # mark as tag column
   - fields:
       - request_line
     type: string
@@ -105,6 +104,10 @@ transform:
   - fields:
       - response_size
     type: int64
+  - fields:
+      - request_id
+    type: string
+    index: skipping  # for high-cardinality IDs
   - fields:
       - timestamp
     type: time
@@ -177,11 +180,35 @@ Pattern: `%{timestamp} %{hostname} %{app}[%{pid}]: %{message}`
 
 ## Best Practices
 
-1. **Tag Selection**: Use `tag: true` for low-cardinality fields used in filtering (e.g., `status_code`, `log_level`, `service_name`, `region`)
-2. **Fulltext Index**: Use `index: fulltext` for high-cardinality text fields that need search (e.g., `message`, `request_path`, `user_agent`)
-3. **Inverted Index**: Use `index: inverted` for fields used in equality/range queries
-4. **Exclude Original Message**: After parsing, use `select` processor to exclude the original `message` field to save storage
-5. **Timestamp**: Always ensure exactly one field has `index: timestamp` - this is required
+### Tag Selection (Primary Key)
+- **For log tables, avoid using tags (primary keys)** - GreptimeDB sorts data by (primary key, timestamp), and for logs, sorting by timestamp alone is usually sufficient
+- If you must use tags, choose **low-cardinality fields** (< 10,000 unique values) like `service_name`, `region`, `log_level`
+- **Do NOT use high-cardinality fields as tags** (e.g., `request_id`, `trace_id`, `user_id`)
+
+### Index Selection
+| Index Type | When to Use | Supported Operations | Storage Overhead |
+|------------|-------------|---------------------|------------------|
+| `inverted` | Low-cardinality fields for filtering | `=`, `!=`, `IN`, `BETWEEN`, `>`, `<` | Medium-High |
+| `fulltext` | Unstructured text needing tokenized search | `MATCHES` (full-text search) | High |
+| `skipping` | High-cardinality fields (e.g., `request_id`) | `=` only | Low |
+
+**Guidelines:**
+- Use `index: inverted` for fields like `status_code`, `method`, `log_level` - creates mapping between values and rows
+- Use `index: fulltext` for log message body or unstructured text - supports word-based matching
+- Use `index: skipping` for high-cardinality IDs like `request_id`, `trace_id`, `mac_address` - maintains min/max metadata per data block
+- **Only index columns frequently used in WHERE clauses** - unnecessary indexes waste storage and slow down ingestion
+- Fields without index can still be queried, just slower
+- Inverted index becomes inefficient with too many unique values - consider skipping index instead
+
+### Table Design for Logs
+- **Append-only mode**: Log tables should use append mode (no updates/deletes)
+- **No time-based partitioning needed**: GreptimeDB automatically partitions by TIME INDEX
+- **Partition by business dimension** if needed (e.g., by datacenter or application)
+
+### Other Tips
+- After parsing, use `select` processor to exclude the original `message` field to save storage
+- Always ensure exactly one field has `index: timestamp` - this is required
+- Prefer structured logging over full-text search for better query performance
 
 ## Troubleshooting
 
@@ -241,23 +268,22 @@ transform:
   - fields:
       - ip
     type: string
-    index: inverted
-    tag: true
+    index: inverted   # low-cardinality, for filtering
   - fields:
       - method
     type: string
-    index: inverted
+    index: inverted   # low-cardinality (GET, POST, etc.)
   - fields:
       - path
     type: string
-    index: fulltext
+    index: fulltext   # for text search on URL paths
   - fields:
       - protocol
     type: string
   - fields:
       - status
     type: int32
-    index: inverted
+    index: inverted   # for filtering by status code
   - fields:
       - size
     type: int64
