@@ -493,6 +493,31 @@ def test_validate_time_expression_injection():
     assert "Invalid characters" in str(excinfo.value)
 
 
+def test_validate_time_expression_unbalanced_quotes():
+    """Test validate_time_expression blocks unbalanced quotes"""
+    # Odd number of quotes should be rejected
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("2024-01-01T00:00:00Z' OR 1=1", "start")
+    assert "Unbalanced quotes" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("now() - interval '5 minute", "end")
+    assert "Unbalanced quotes" in str(excinfo.value)
+
+    # Balanced quotes are allowed
+    result = validate_time_expression("now() - interval '5' minute", "start")
+    assert result == "now() - interval '5' minute"
+
+
+def test_format_tql_time_param_escapes_quotes():
+    """Test format_tql_time_param escapes quotes in literals"""
+    # Quotes in literals should be escaped
+    assert format_tql_time_param("test'value") == "'test''value'"
+    assert format_tql_time_param("a''b") == "'a''''b'"
+    # SQL expressions are not escaped
+    assert format_tql_time_param("now()") == "now()"
+
+
 def test_validate_time_expression_dangerous():
     """Test validate_time_expression blocks dangerous patterns"""
     with pytest.raises(ValueError) as excinfo:

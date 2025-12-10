@@ -115,7 +115,32 @@ Claude will:
 4. Test it with `dryrun_pipeline` tool
 
 ## Security
-All queries pass through a security gate that:
+
+### Database User Configuration (Recommended)
+
+For production deployments, create a **read-only database user** for the MCP server. This provides defense-in-depth security at the database level.
+
+Configure a read-only user in GreptimeDB using [static user provider](https://docs.greptime.com/user-guide/deployments-administration/authentication/static/#permission-modes):
+
+```
+# User format: username:permission_mode=password
+mcp_readonly:readonly=your_secure_password
+```
+
+Permission modes:
+- `readonly` (or `ro`) - Can only query data (recommended for MCP server)
+- `writeonly` (or `wo`) - Can only write data
+- `readwrite` (or `rw`) - Full access (default)
+
+Then configure the MCP server to use this user:
+```bash
+GREPTIMEDB_USER=mcp_readonly
+GREPTIMEDB_PASSWORD=your_secure_password
+```
+
+### Application-Level Security Gate
+
+All queries also pass through a security gate that:
 - Blocks DDL/DML operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
 - Blocks dynamic SQL execution: EXEC, EXECUTE, CALL
 - Blocks data modification: REPLACE INTO

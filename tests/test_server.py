@@ -257,6 +257,21 @@ async def test_execute_tql_injection_blocked():
 
 
 @pytest.mark.asyncio
+async def test_execute_tql_escapes_literal_quotes():
+    """Literal start/end values with quotes should be escaped, not injected"""
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z'quoted'",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+    )
+
+    data = json.loads(result)
+    # Quotes should be doubled inside the TQL string to keep the literal safe
+    assert "2024-01-01T00:00:00Z''quoted''" in data["tql"]
+
+
+@pytest.mark.asyncio
 async def test_execute_tql_dangerous_query_blocked():
     """Test execute_tql blocks dangerous patterns in query"""
     result = await execute_tql(
