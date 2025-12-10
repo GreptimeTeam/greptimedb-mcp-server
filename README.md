@@ -149,6 +149,28 @@ All queries also pass through a security gate that:
 - Prevents multiple statement execution with dangerous operations
 - Allows read-only operations: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION, INFORMATION_SCHEMA
 
+### Audit Logging
+
+All tool invocations are logged for security auditing and compliance. Each log entry includes:
+- Tool name and parameters (truncated to 200 characters)
+- Execution status (success/failure)
+- Duration in milliseconds
+- Error details (if any)
+
+**Log format:**
+```
+2024-01-15 10:30:45 - greptimedb_mcp_server.audit - INFO - [AUDIT] execute_sql | query="SELECT * FROM cpu LIMIT 10" | success=True | duration_ms=45.2
+```
+
+**Configuration:**
+```bash
+# Disable audit logging (default: true)
+GREPTIMEDB_AUDIT_ENABLED=false
+
+# Or via CLI
+greptimedb-mcp-server --audit-enabled false
+```
+
 ## Data Masking
 Sensitive data in query results is automatically masked to protect privacy:
 

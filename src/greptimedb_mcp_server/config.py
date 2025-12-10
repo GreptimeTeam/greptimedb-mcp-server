@@ -79,6 +79,11 @@ class Config:
     MCP HTTP server bind port (for sse/streamable-http transports)
     """
 
+    audit_enabled: bool
+    """
+    Enable audit logging for all tool calls
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -186,6 +191,13 @@ class Config:
             default=int(os.getenv("GREPTIMEDB_LISTEN_PORT", "8080")),
         )
 
+        parser.add_argument(
+            "--audit-enabled",
+            type=lambda x: x.lower() not in ("false", "0", "no"),
+            help="Enable audit logging for all tool calls (default: true)",
+            default=os.getenv("GREPTIMEDB_AUDIT_ENABLED", "true"),
+        )
+
         args = parser.parse_args()
         return Config(
             host=args.host,
@@ -202,4 +214,5 @@ class Config:
             transport=args.transport,
             listen_host=args.listen_host,
             listen_port=args.listen_port,
+            audit_enabled=args.audit_enabled,
         )
