@@ -103,7 +103,7 @@ greptimedb-mcp-server \
 
 ### HTTP Server Mode
 
-For containerized or Kubernetes deployments:
+For containerized or Kubernetes deployments. Requires `mcp>=1.8.0`:
 
 ```bash
 # Streamable HTTP (recommended for production)
