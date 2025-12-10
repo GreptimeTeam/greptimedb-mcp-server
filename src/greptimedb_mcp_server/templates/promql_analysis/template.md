@@ -57,6 +57,7 @@ histogram_quantile(0.99, rate({{ metric }}_bucket[5m])) > 0.5
 ## Notes
 
 - Use `execute_tql` tool with: query, start, end, step (required), lookback (optional)
+- Time formats: SQL expression (now(), now() - interval '5' minute), RFC3339, or Unix timestamp
 - Label matchers: `=`, `!=`, `=~` (regex), `!~`
 - Time durations: s, m, h, d, w
 

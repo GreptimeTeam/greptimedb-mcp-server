@@ -115,7 +115,32 @@ Claude will:
 4. Test it with `dryrun_pipeline` tool
 
 ## Security
-All queries pass through a security gate that:
+
+### Database User Configuration (Recommended)
+
+For production deployments, create a **read-only database user** for the MCP server. This provides defense-in-depth security at the database level.
+
+Configure a read-only user in GreptimeDB using [static user provider](https://docs.greptime.com/user-guide/deployments-administration/authentication/static/#permission-modes):
+
+```
+# User format: username:permission_mode=password
+mcp_readonly:readonly=your_secure_password
+```
+
+Permission modes:
+- `readonly` (or `ro`) - Can only query data (recommended for MCP server)
+- `writeonly` (or `wo`) - Can only write data
+- `readwrite` (or `rw`) - Full access (default)
+
+Then configure the MCP server to use this user:
+```bash
+GREPTIMEDB_USER=mcp_readonly
+GREPTIMEDB_PASSWORD=your_secure_password
+```
+
+### Application-Level Security Gate
+
+All queries also pass through a security gate that:
 - Blocks DDL/DML operations: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE
 - Blocks dynamic SQL execution: EXEC, EXECUTE, CALL
 - Blocks data modification: REPLACE INTO
@@ -178,6 +203,11 @@ GREPTIMEDB_TIMEZONE=UTC
 GREPTIMEDB_POOL_SIZE=5         # Optional: Connection pool size (defaults to 5)
 GREPTIMEDB_MASK_ENABLED=true   # Optional: Enable data masking (defaults to true)
 GREPTIMEDB_MASK_PATTERNS=      # Optional: Additional sensitive column patterns (comma-separated)
+
+# MCP Server Transport Options
+GREPTIMEDB_TRANSPORT=stdio     # Optional: Transport mode (stdio, sse, streamable-http, defaults to stdio)
+GREPTIMEDB_LISTEN_HOST=0.0.0.0 # Optional: HTTP server bind host (defaults to 0.0.0.0)
+GREPTIMEDB_LISTEN_PORT=8080    # Optional: HTTP server bind port (defaults to 8080)
 ```
 
 Or via command-line args:
@@ -192,7 +222,33 @@ Or via command-line args:
 * `--timezone` the session time zone, empty by default (using server default time zone),
 * `--pool-size` the connection pool size, `5` by default,
 * `--mask-enabled` enable data masking for sensitive columns, `true` by default,
-* `--mask-patterns` additional sensitive column patterns (comma-separated), empty by default.
+* `--mask-patterns` additional sensitive column patterns (comma-separated), empty by default,
+* `--transport` MCP transport mode (`stdio`, `sse`, `streamable-http`), `stdio` by default,
+* `--listen-host` HTTP server bind host (for sse/streamable-http), `0.0.0.0` by default,
+* `--listen-port` HTTP server bind port (for sse/streamable-http), `8080` by default.
+
+## HTTP Server Mode
+
+For containerized or Kubernetes deployments, you can run the MCP server in HTTP mode instead of stdio:
+
+```bash
+# Streamable HTTP mode (recommended for production)
+greptimedb-mcp-server --transport streamable-http --listen-port 8080
+
+# SSE mode (legacy, for older clients)
+greptimedb-mcp-server --transport sse --listen-host 0.0.0.0 --listen-port 3000
+
+# Via environment variables (for Docker/K8s)
+GREPTIMEDB_TRANSPORT=streamable-http \
+GREPTIMEDB_LISTEN_HOST=0.0.0.0 \
+GREPTIMEDB_LISTEN_PORT=8080 \
+greptimedb-mcp-server
+```
+
+**Transport modes:**
+- `stdio` (default): Standard input/output, for local CLI integration (e.g., Claude Desktop)
+- `streamable-http`: HTTP-based transport with SSE streaming, recommended for remote/production deployments
+- `sse`: Server-Sent Events transport (legacy, being deprecated in MCP spec)
 
 # Usage
 

@@ -5,6 +5,9 @@ from greptimedb_mcp_server.utils import (
     templates_loader,
     security_gate,
     validate_table_name,
+    is_sql_time_expression,
+    format_tql_time_param,
+    validate_time_expression,
 )
 from greptimedb_mcp_server.formatter import format_results
 
@@ -418,3 +421,105 @@ def test_validate_table_name_invalid():
     with pytest.raises(ValueError) as excinfo:
         validate_table_name("")
     assert "required" in str(excinfo.value)
+
+
+# Tests for time expression functions
+
+
+def test_is_sql_time_expression_with_function():
+    """Test is_sql_time_expression detects SQL function calls"""
+    assert is_sql_time_expression("now()") is True
+    assert is_sql_time_expression("now() - interval '5' minute") is True
+    assert is_sql_time_expression("date_trunc('day', now())") is True
+    assert is_sql_time_expression("NOW()") is True
+
+
+def test_is_sql_time_expression_without_function():
+    """Test is_sql_time_expression returns False for non-SQL expressions"""
+    assert is_sql_time_expression("2024-01-01T00:00:00Z") is False
+    assert is_sql_time_expression("1704067200") is False
+    assert is_sql_time_expression("1704067200.123") is False
+
+
+def test_format_tql_time_param_sql_expression():
+    """Test format_tql_time_param leaves SQL expressions unquoted"""
+    assert format_tql_time_param("now()") == "now()"
+    assert format_tql_time_param("now() - interval '5' minute") == (
+        "now() - interval '5' minute"
+    )
+    assert format_tql_time_param("date_trunc('day', now())") == (
+        "date_trunc('day', now())"
+    )
+
+
+def test_format_tql_time_param_literal():
+    """Test format_tql_time_param quotes literal values"""
+    assert format_tql_time_param("2024-01-01T00:00:00Z") == "'2024-01-01T00:00:00Z'"
+    assert format_tql_time_param("1704067200") == "'1704067200'"
+    assert format_tql_time_param("1704067200.123") == "'1704067200.123'"
+
+
+def test_validate_time_expression_valid():
+    """Test validate_time_expression accepts valid expressions"""
+    assert validate_time_expression("now()", "start") == "now()"
+    assert validate_time_expression("now() - interval '5' minute", "start") == (
+        "now() - interval '5' minute"
+    )
+    assert validate_time_expression("2024-01-01T00:00:00Z", "end") == (
+        "2024-01-01T00:00:00Z"
+    )
+    assert validate_time_expression("1704067200", "start") == "1704067200"
+
+
+def test_validate_time_expression_empty():
+    """Test validate_time_expression rejects empty values"""
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("", "start")
+    assert "start is required" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("", "end")
+    assert "end is required" in str(excinfo.value)
+
+
+def test_validate_time_expression_injection():
+    """Test validate_time_expression blocks injection attempts"""
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("now(); DROP TABLE users", "start")
+    assert "Invalid characters" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("now() -- comment", "end")
+    assert "Invalid characters" in str(excinfo.value)
+
+
+def test_validate_time_expression_unbalanced_quotes():
+    """Test validate_time_expression blocks unbalanced quotes"""
+    # Odd number of quotes should be rejected
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("2024-01-01T00:00:00Z' OR 1=1", "start")
+    assert "Unbalanced quotes" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("now() - interval '5 minute", "end")
+    assert "Unbalanced quotes" in str(excinfo.value)
+
+    # Balanced quotes are allowed
+    result = validate_time_expression("now() - interval '5' minute", "start")
+    assert result == "now() - interval '5' minute"
+
+
+def test_format_tql_time_param_escapes_quotes():
+    """Test format_tql_time_param escapes quotes in literals"""
+    # Quotes in literals should be escaped
+    assert format_tql_time_param("test'value") == "'test''value'"
+    assert format_tql_time_param("a''b") == "'a''''b'"
+    # SQL expressions are not escaped
+    assert format_tql_time_param("now()") == "now()"
+
+
+def test_validate_time_expression_dangerous():
+    """Test validate_time_expression blocks dangerous patterns"""
+    with pytest.raises(ValueError) as excinfo:
+        validate_time_expression("DELETE FROM users", "start")
+    assert "Dangerous pattern" in str(excinfo.value)

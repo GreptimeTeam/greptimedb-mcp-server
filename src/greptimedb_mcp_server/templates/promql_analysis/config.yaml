@@ -5,10 +5,10 @@ arguments:
     description: "The metric name to query (required)."
     required: true
   - name: "start_time"
-    description: "Query start time (e.g., 'now-1h' or ISO timestamp)."
+    description: "Start time: SQL expression (now() - interval '5' minute), RFC3339, or Unix timestamp."
     required: true
   - name: "end_time"
-    description: "Query end time (e.g., 'now' or ISO timestamp)."
+    description: "End time: SQL expression (now()), RFC3339, or Unix timestamp."
     required: true
 metadata:
   tags:

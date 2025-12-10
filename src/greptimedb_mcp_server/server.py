@@ -10,6 +10,8 @@ from greptimedb_mcp_server.utils import (
     validate_query_component,
     validate_duration,
     validate_fill,
+    validate_time_expression,
+    format_tql_time_param,
 )
 
 import asyncio
@@ -77,8 +79,24 @@ class AppState:
         return None
 
 
+# Global config (set by main() before run())
+_config: Config | None = None
+
 # Global state (initialized in lifespan)
 _state: AppState | None = None
+
+
+def get_config() -> Config:
+    """Get the parsed configuration.
+
+    Falls back to parsing from env/args if not pre-initialized by main().
+    This preserves compatibility with alternative entry points like
+    `mcp dev greptimedb_mcp_server.server:mcp` or programmatic imports.
+    """
+    global _config
+    if _config is None:
+        _config = Config.from_env_arguments()
+    return _config
 
 
 def get_state() -> AppState:
@@ -93,7 +111,7 @@ async def lifespan(mcp: FastMCP):
     """Initialize application state on startup."""
     global _state
 
-    config = Config.from_env_arguments()
+    config = get_config()
     db_config = {
         "host": config.host,
         "port": config.port,
@@ -337,9 +355,14 @@ async def execute_tql(
         "Example: rate(http_requests_total[5m])",
     ],
     start: Annotated[
-        str, "Start time (RFC3339, Unix timestamp, or relative like 'now-1h')"
+        str,
+        "Start time: SQL expression (e.g., \"now() - interval '5' minute\"), "
+        "RFC3339 (e.g., '2024-01-01T00:00:00Z'), or Unix timestamp",
     ],
-    end: Annotated[str, "End time (RFC3339, Unix timestamp, or relative like 'now')"],
+    end: Annotated[
+        str,
+        "End time: SQL expression (e.g., 'now()'), " "RFC3339, or Unix timestamp",
+    ],
     step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
     lookback: Annotated[str | None, "Lookback delta for range queries"] = None,
     format: Annotated[
@@ -354,8 +377,8 @@ async def execute_tql(
     if format not in VALID_FORMATS:
         raise ValueError(f"Invalid format: {format}. Must be one of: {VALID_FORMATS}")
 
-    validate_tql_param(start, "start")
-    validate_tql_param(end, "end")
+    validate_time_expression(start, "start")
+    validate_time_expression(end, "end")
     validate_tql_param(step, "step")
     if lookback:
         validate_tql_param(lookback, "lookback")
@@ -364,10 +387,12 @@ async def execute_tql(
     if is_dangerous:
         return f"Error: Dangerous operation blocked: {reason}"
 
+    start_param = format_tql_time_param(start)
+    end_param = format_tql_time_param(end)
     if lookback:
-        tql = f"TQL EVAL ('{start}', '{end}', '{step}', '{lookback}') {query}"
+        tql = f"TQL EVAL ({start_param}, {end_param}, '{step}', '{lookback}') {query}"
     else:
-        tql = f"TQL EVAL ('{start}', '{end}', '{step}') {query}"
+        tql = f"TQL EVAL ({start_param}, {end_param}, '{step}') {query}"
 
     start_time = time.time()
 
@@ -834,7 +859,22 @@ _register_prompts()
 
 def main():
     """Main entry point."""
-    mcp.run()
+    global _config
+    _config = Config.from_env_arguments()
+
+    # Only configure HTTP server settings for non-stdio transports
+    # to avoid overriding user's programmatic configuration
+    if _config.transport != "stdio":
+        mcp.settings.host = _config.listen_host
+        mcp.settings.port = _config.listen_port
+        logger.info(
+            f"Starting MCP server with transport: {_config.transport} "
+            f"on {_config.listen_host}:{_config.listen_port}"
+        )
+    else:
+        logger.info("Starting MCP server with transport: stdio")
+
+    mcp.run(transport=_config.transport)
 
 
 if __name__ == "__main__":

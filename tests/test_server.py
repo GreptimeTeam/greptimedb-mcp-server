@@ -36,7 +36,12 @@ def setup_state():
         http_protocol="http",
         mask_enabled=False,
         mask_patterns="",
+        transport="stdio",
+        listen_host="0.0.0.0",
+        listen_port=8080,
     )
+    # Set global config for get_config() calls
+    server._config = config
     db_config = {
         "host": config.host,
         "port": config.port,
@@ -249,6 +254,21 @@ async def test_execute_tql_injection_blocked():
             step="1m",
         )
     assert "Invalid characters" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_tql_escapes_literal_quotes():
+    """Literal start/end values with quotes should be escaped, not injected"""
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z'quoted'",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+    )
+
+    data = json.loads(result)
+    # Quotes should be doubled inside the TQL string to keep the literal safe
+    assert "2024-01-01T00:00:00Z''quoted''" in data["tql"]
 
 
 @pytest.mark.asyncio

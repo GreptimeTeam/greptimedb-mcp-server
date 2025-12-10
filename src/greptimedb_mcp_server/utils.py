@@ -135,3 +135,32 @@ def validate_fill(value: str) -> str:
     if not FILL_PATTERN.match(value):
         raise ValueError("Invalid fill: must be NULL, PREV, LINEAR, or a number")
     return value
+
+
+def is_sql_time_expression(value: str) -> bool:
+    """Check if value is a SQL time expression (contains function call)."""
+    return "(" in value
+
+
+def format_tql_time_param(value: str) -> str:
+    """Format time parameter for TQL: quote literals, leave SQL expressions as-is."""
+    if is_sql_time_expression(value):
+        return value
+    # Escape single quotes in literal values to avoid breaking the TQL statement
+    safe_value = value.replace("'", "''")
+    return f"'{safe_value}'"
+
+
+def validate_time_expression(value: str, name: str) -> str:
+    """Validate time expression for TQL start/end parameters."""
+    if not value:
+        raise ValueError(f"{name} is required")
+    if ";" in value or "--" in value:
+        raise ValueError(f"Invalid characters in {name}")
+    # Guard against malformed or injected strings with unbalanced quotes
+    if value.count("'") % 2 != 0:
+        raise ValueError(f"Unbalanced quotes in {name}")
+    is_dangerous, reason = security_gate(value)
+    if is_dangerous:
+        raise ValueError(f"Dangerous pattern in {name}: {reason}")
+    return value
