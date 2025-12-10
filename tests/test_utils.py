@@ -8,6 +8,9 @@ from greptimedb_mcp_server.utils import (
     is_sql_time_expression,
     format_tql_time_param,
     validate_time_expression,
+    _truncate_value,
+    _format_audit_params,
+    audit_log,
 )
 from greptimedb_mcp_server.formatter import format_results
 
@@ -523,3 +526,36 @@ def test_validate_time_expression_dangerous():
     with pytest.raises(ValueError) as excinfo:
         validate_time_expression("DELETE FROM users", "start")
     assert "Dangerous pattern" in str(excinfo.value)
+
+
+# Tests for audit logging functions
+
+
+def test_truncate_value():
+    """Test _truncate_value truncates long values"""
+    assert _truncate_value("short") == "short"
+    assert _truncate_value("a" * 201) == "a" * 200 + "..."
+
+
+def test_format_audit_params():
+    """Test _format_audit_params formats params correctly"""
+    assert _format_audit_params({}) == ""
+    assert _format_audit_params({"query": "SELECT 1"}) == 'query="SELECT 1"'
+
+
+def test_audit_log(caplog):
+    """Test audit_log records tool calls"""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="greptimedb_mcp_server.audit"):
+        audit_log("execute_sql", {"query": "SELECT 1"}, success=True, duration_ms=10.5)
+
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].message
+    assert "[AUDIT] execute_sql" in msg
+    assert "success=True" in msg
+
+
+def test_audit_log_never_raises():
+    """Test audit_log never raises exceptions"""
+    audit_log(None, None, None, None, None)  # Should not raise

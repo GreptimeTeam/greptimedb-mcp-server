@@ -2,6 +2,7 @@ import re
 import logging
 import yaml
 import os
+from typing import Any
 
 logger = logging.getLogger("greptimedb_mcp_server")
 
@@ -169,7 +170,7 @@ def validate_time_expression(value: str, name: str) -> str:
 audit_logger = logging.getLogger("greptimedb_mcp_server.audit")
 
 
-def _truncate_value(v: any, max_len: int = 200) -> str:
+def _truncate_value(v: Any, max_len: int = 200) -> str:
     """Truncate a value to max_len characters."""
     v_str = str(v)
     if len(v_str) > max_len:
@@ -192,7 +193,7 @@ def audit_log(
     params: dict,
     success: bool,
     duration_ms: float,
-    error: str = None,
+    error: str | None = None,
 ):
     """Record audit log for tool invocation. Never raises exceptions."""
     try:
