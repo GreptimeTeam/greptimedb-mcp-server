@@ -159,7 +159,7 @@ All tool invocations are logged for security auditing and compliance. Each log e
 
 **Log format:**
 ```
-2024-01-15 10:30:45 - greptimedb_mcp_server.audit - INFO - [AUDIT] execute_sql | query="SELECT * FROM cpu LIMIT 10" | success=True | duration_ms=45.2
+2025-12-10 10:30:45 - greptimedb_mcp_server.audit - INFO - [AUDIT] execute_sql | query="SELECT * FROM cpu LIMIT 10" | success=True | duration_ms=45.2
 ```
 
 **Configuration:**
