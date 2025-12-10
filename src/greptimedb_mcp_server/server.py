@@ -77,8 +77,24 @@ class AppState:
         return None
 
 
+# Global config (set by main() before run())
+_config: Config | None = None
+
 # Global state (initialized in lifespan)
 _state: AppState | None = None
+
+
+def get_config() -> Config:
+    """Get the parsed configuration.
+
+    Falls back to parsing from env/args if not pre-initialized by main().
+    This preserves compatibility with alternative entry points like
+    `mcp dev greptimedb_mcp_server.server:mcp` or programmatic imports.
+    """
+    global _config
+    if _config is None:
+        _config = Config.from_env_arguments()
+    return _config
 
 
 def get_state() -> AppState:
@@ -93,7 +109,7 @@ async def lifespan(mcp: FastMCP):
     """Initialize application state on startup."""
     global _state
 
-    config = Config.from_env_arguments()
+    config = get_config()
     db_config = {
         "host": config.host,
         "port": config.port,
@@ -834,7 +850,22 @@ _register_prompts()
 
 def main():
     """Main entry point."""
-    mcp.run()
+    global _config
+    _config = Config.from_env_arguments()
+
+    # Only configure HTTP server settings for non-stdio transports
+    # to avoid overriding user's programmatic configuration
+    if _config.transport != "stdio":
+        mcp.settings.host = _config.listen_host
+        mcp.settings.port = _config.listen_port
+        logger.info(
+            f"Starting MCP server with transport: {_config.transport} "
+            f"on {_config.listen_host}:{_config.listen_port}"
+        )
+    else:
+        logger.info("Starting MCP server with transport: stdio")
+
+    mcp.run(transport=_config.transport)
 
 
 if __name__ == "__main__":

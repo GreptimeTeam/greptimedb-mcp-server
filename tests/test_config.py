@@ -20,6 +20,9 @@ def test_config_default_values():
             assert config.http_protocol == "http"
             assert config.mask_enabled is True
             assert config.mask_patterns == ""
+            assert config.transport == "stdio"
+            assert config.listen_host == "0.0.0.0"
+            assert config.listen_port == 8080
 
 
 def test_config_env_variables():
@@ -36,6 +39,9 @@ def test_config_env_variables():
         "GREPTIMEDB_HTTP_PROTOCOL": "https",
         "GREPTIMEDB_MASK_ENABLED": "false",
         "GREPTIMEDB_MASK_PATTERNS": "phone,address",
+        "GREPTIMEDB_TRANSPORT": "streamable-http",
+        "GREPTIMEDB_LISTEN_HOST": "127.0.0.1",
+        "GREPTIMEDB_LISTEN_PORT": "3000",
     }
 
     with patch.dict(os.environ, env_vars):
@@ -51,6 +57,9 @@ def test_config_env_variables():
             assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "phone,address"
+            assert config.transport == "streamable-http"
+            assert config.listen_host == "127.0.0.1"
+            assert config.listen_port == 3000
 
 
 def test_config_cli_arguments():
@@ -77,6 +86,12 @@ def test_config_cli_arguments():
         "false",
         "--mask-patterns",
         "custom1,custom2",
+        "--transport",
+        "sse",
+        "--listen-host",
+        "192.168.1.1",
+        "--listen-port",
+        "9090",
     ]
 
     with patch.dict(os.environ, {}, clear=True):
@@ -92,6 +107,9 @@ def test_config_cli_arguments():
             assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "custom1,custom2"
+            assert config.transport == "sse"
+            assert config.listen_host == "192.168.1.1"
+            assert config.listen_port == 9090
 
 
 def test_config_precedence():
@@ -108,6 +126,9 @@ def test_config_precedence():
         "GREPTIMEDB_HTTP_PROTOCOL": "http",
         "GREPTIMEDB_MASK_ENABLED": "true",
         "GREPTIMEDB_MASK_PATTERNS": "env_pattern",
+        "GREPTIMEDB_TRANSPORT": "stdio",
+        "GREPTIMEDB_LISTEN_HOST": "env-listen-host",
+        "GREPTIMEDB_LISTEN_PORT": "1111",
     }
 
     cli_args = [
@@ -130,6 +151,12 @@ def test_config_precedence():
         "false",
         "--mask-patterns",
         "cli_pattern",
+        "--transport",
+        "streamable-http",
+        "--listen-host",
+        "cli-listen-host",
+        "--listen-port",
+        "2222",
     ]
 
     with patch.dict(os.environ, env_vars):
@@ -145,3 +172,6 @@ def test_config_precedence():
             assert config.http_protocol == "https"
             assert config.mask_enabled is False
             assert config.mask_patterns == "cli_pattern"
+            assert config.transport == "streamable-http"
+            assert config.listen_host == "cli-listen-host"
+            assert config.listen_port == 2222

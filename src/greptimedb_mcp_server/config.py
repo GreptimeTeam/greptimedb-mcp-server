@@ -64,6 +64,21 @@ class Config:
     Additional sensitive column patterns (comma-separated)
     """
 
+    transport: str
+    """
+    MCP transport mode: stdio, sse, or streamable-http
+    """
+
+    listen_host: str
+    """
+    MCP HTTP server bind host (for sse/streamable-http transports)
+    """
+
+    listen_port: int
+    """
+    MCP HTTP server bind port (for sse/streamable-http transports)
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -149,6 +164,28 @@ class Config:
             default=os.getenv("GREPTIMEDB_MASK_PATTERNS", ""),
         )
 
+        parser.add_argument(
+            "--transport",
+            type=str,
+            choices=["stdio", "sse", "streamable-http"],
+            help="MCP transport mode (default: stdio)",
+            default=os.getenv("GREPTIMEDB_TRANSPORT", "stdio"),
+        )
+
+        parser.add_argument(
+            "--listen-host",
+            type=str,
+            help="MCP HTTP server bind host (default: 0.0.0.0)",
+            default=os.getenv("GREPTIMEDB_LISTEN_HOST", "0.0.0.0"),
+        )
+
+        parser.add_argument(
+            "--listen-port",
+            type=int,
+            help="MCP HTTP server bind port (default: 8080)",
+            default=int(os.getenv("GREPTIMEDB_LISTEN_PORT", "8080")),
+        )
+
         args = parser.parse_args()
         return Config(
             host=args.host,
@@ -162,4 +199,7 @@ class Config:
             http_protocol=args.http_protocol,
             mask_enabled=args.mask_enabled,
             mask_patterns=args.mask_patterns,
+            transport=args.transport,
+            listen_host=args.listen_host,
+            listen_port=args.listen_port,
         )

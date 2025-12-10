@@ -36,7 +36,12 @@ def setup_state():
         http_protocol="http",
         mask_enabled=False,
         mask_patterns="",
+        transport="stdio",
+        listen_host="0.0.0.0",
+        listen_port=8080,
     )
+    # Set global config for get_config() calls
+    server._config = config
     db_config = {
         "host": config.host,
         "port": config.port,
