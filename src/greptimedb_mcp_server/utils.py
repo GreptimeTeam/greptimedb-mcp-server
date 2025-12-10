@@ -2,6 +2,7 @@ import re
 import logging
 import yaml
 import os
+from typing import Any
 
 logger = logging.getLogger("greptimedb_mcp_server")
 
@@ -157,10 +158,56 @@ def validate_time_expression(value: str, name: str) -> str:
         raise ValueError(f"{name} is required")
     if ";" in value or "--" in value:
         raise ValueError(f"Invalid characters in {name}")
-    # Guard against malformed or injected strings with unbalanced quotes
     if value.count("'") % 2 != 0:
         raise ValueError(f"Unbalanced quotes in {name}")
     is_dangerous, reason = security_gate(value)
     if is_dangerous:
         raise ValueError(f"Dangerous pattern in {name}: {reason}")
     return value
+
+
+# Audit logging
+audit_logger = logging.getLogger("greptimedb_mcp_server.audit")
+
+
+def _truncate_value(v: Any, max_len: int = 200) -> str:
+    """Truncate a value to max_len characters."""
+    v_str = str(v)
+    if len(v_str) > max_len:
+        return v_str[:max_len] + "..."
+    return v_str
+
+
+def _format_audit_params(params: dict) -> str:
+    """Format parameters for audit log."""
+    if not params:
+        return ""
+    parts = []
+    for k, v in params.items():
+        parts.append(f'{k}="{_truncate_value(v)}"')
+    return " | ".join(parts)
+
+
+def audit_log(
+    tool: str,
+    params: dict,
+    success: bool,
+    duration_ms: float,
+    error: str | None = None,
+):
+    """Record audit log for tool invocation. Never raises exceptions."""
+    try:
+        parts = [f"[AUDIT] {tool}"]
+
+        params_str = _format_audit_params(params)
+        if params_str:
+            parts.append(params_str)
+
+        parts.append(f"success={success}")
+        if error:
+            parts.append(f'error="{_truncate_value(error)}"')
+        parts.append(f"duration_ms={duration_ms:.1f}")
+
+        audit_logger.info(" | ".join(parts))
+    except Exception:
+        pass

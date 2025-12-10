@@ -39,6 +39,7 @@ def setup_state():
         transport="stdio",
         listen_host="0.0.0.0",
         listen_port=8080,
+        audit_enabled=False,
     )
     # Set global config for get_config() calls
     server._config = config

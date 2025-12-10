@@ -12,6 +12,7 @@ from greptimedb_mcp_server.utils import (
     validate_fill,
     validate_time_expression,
     format_tql_time_param,
+    audit_log,
 )
 
 import asyncio
@@ -857,10 +858,38 @@ def prompt_fn({arg_params}) -> str:
 _register_prompts()
 
 
+def _install_audit_hook():
+    """Install audit logging hook by wrapping tool manager's call_tool method."""
+    original_call_tool = mcp._tool_manager.call_tool
+
+    async def audited_call_tool(name, arguments, context=None, convert_result=False):
+        start_time = time.time()
+        try:
+            result = await original_call_tool(name, arguments, context, convert_result)
+            elapsed_ms = (time.time() - start_time) * 1000
+            audit_log(name, arguments, success=True, duration_ms=elapsed_ms)
+            return result
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            audit_log(
+                name, arguments, success=False, duration_ms=elapsed_ms, error=str(e)
+            )
+            raise
+
+    mcp._tool_manager.call_tool = audited_call_tool
+
+
 def main():
     """Main entry point."""
     global _config
     _config = Config.from_env_arguments()
+
+    # Install audit logging hook if enabled
+    if _config.audit_enabled:
+        _install_audit_hook()
+        logger.info("Audit logging: enabled")
+    else:
+        logger.info("Audit logging: disabled")
 
     # Only configure HTTP server settings for non-stdio transports
     # to avoid overriding user's programmatic configuration
