@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "greptimedb-mcp-server"
-version = "0.4.0"
+version = "0.4.1"
 description = "MCP server for GreptimeDB with SQL/TQL/PromQL support, sensitive data masking, and prompt templates for observability data analysis."
 readme = "README.md"
 license = {text = "MIT"}
