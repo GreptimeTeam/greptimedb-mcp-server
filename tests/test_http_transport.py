@@ -248,3 +248,110 @@ class TestTransportConfig:
                     from greptimedb_mcp_server.config import Config
 
                     Config.from_env_arguments()
+
+
+class TestDnsRebindingProtection:
+    """Tests for DNS rebinding protection configuration."""
+
+    @pytest.mark.asyncio
+    async def test_protection_disabled_by_default(self, free_port, mock_db_connection):
+        """Test that DNS rebinding protection is disabled when allowed_hosts is empty."""
+        from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp.server import TransportSecuritySettings
+
+        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+
+        # Simulate our server.py logic: empty allowed_hosts = disabled
+        test_mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+
+        async def run_server():
+            await test_mcp.run_streamable_http_async()
+
+        server_task = asyncio.create_task(run_server())
+        await asyncio.sleep(0.5)
+
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                # Request with arbitrary Host header should succeed
+                response = await client.post(
+                    f"http://127.0.0.1:{free_port}/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "test", "version": "1.0"},
+                        },
+                    },
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream",
+                        "Host": "arbitrary-host.example.com:8080",
+                    },
+                    timeout=5.0,
+                )
+                # Should succeed (not 421)
+                assert response.status_code == 200
+        finally:
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_protection_enabled_rejects_invalid_host(
+        self, free_port, mock_db_connection
+    ):
+        """Test that enabled protection rejects requests with invalid Host header."""
+        from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp.server import TransportSecuritySettings
+
+        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+
+        # Enable protection with specific allowed hosts
+        test_mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["localhost:*", "127.0.0.1:*"],
+        )
+
+        async def run_server():
+            await test_mcp.run_streamable_http_async()
+
+        server_task = asyncio.create_task(run_server())
+        await asyncio.sleep(0.5)
+
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                # Request with disallowed Host header should be rejected
+                response = await client.post(
+                    f"http://127.0.0.1:{free_port}/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "test", "version": "1.0"},
+                        },
+                    },
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream",
+                        "Host": "malicious-host.example.com:8080",
+                    },
+                    timeout=5.0,
+                )
+                # Should be rejected with 421
+                assert response.status_code == 421
+        finally:
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass

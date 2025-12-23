@@ -1,6 +1,6 @@
 import os
 from unittest.mock import patch
-from greptimedb_mcp_server.config import Config
+from greptimedb_mcp_server.config import Config, _parse_comma_separated
 
 
 def test_config_default_values():
@@ -23,6 +23,8 @@ def test_config_default_values():
             assert config.transport == "stdio"
             assert config.listen_host == "0.0.0.0"
             assert config.listen_port == 8080
+            assert config.allowed_hosts == []
+            assert config.allowed_origins == []
 
 
 def test_config_env_variables():
@@ -42,6 +44,8 @@ def test_config_env_variables():
         "GREPTIMEDB_TRANSPORT": "streamable-http",
         "GREPTIMEDB_LISTEN_HOST": "127.0.0.1",
         "GREPTIMEDB_LISTEN_PORT": "3000",
+        "GREPTIMEDB_ALLOWED_HOSTS": "localhost:*,127.0.0.1:*",
+        "GREPTIMEDB_ALLOWED_ORIGINS": "http://localhost:*,https://example.com",
     }
 
     with patch.dict(os.environ, env_vars):
@@ -60,6 +64,11 @@ def test_config_env_variables():
             assert config.transport == "streamable-http"
             assert config.listen_host == "127.0.0.1"
             assert config.listen_port == 3000
+            assert config.allowed_hosts == ["localhost:*", "127.0.0.1:*"]
+            assert config.allowed_origins == [
+                "http://localhost:*",
+                "https://example.com",
+            ]
 
 
 def test_config_cli_arguments():
@@ -92,6 +101,10 @@ def test_config_cli_arguments():
         "192.168.1.1",
         "--listen-port",
         "9090",
+        "--allowed-hosts",
+        "my-service.namespace:*",
+        "--allowed-origins",
+        "http://my-app.example.com",
     ]
 
     with patch.dict(os.environ, {}, clear=True):
@@ -110,6 +123,8 @@ def test_config_cli_arguments():
             assert config.transport == "sse"
             assert config.listen_host == "192.168.1.1"
             assert config.listen_port == 9090
+            assert config.allowed_hosts == ["my-service.namespace:*"]
+            assert config.allowed_origins == ["http://my-app.example.com"]
 
 
 def test_config_precedence():
@@ -175,3 +190,27 @@ def test_config_precedence():
             assert config.transport == "streamable-http"
             assert config.listen_host == "cli-listen-host"
             assert config.listen_port == 2222
+
+
+class TestParseCommaSeparated:
+    """Tests for _parse_comma_separated helper function."""
+
+    def test_empty_and_whitespace(self):
+        assert _parse_comma_separated("") == []
+        assert _parse_comma_separated("   ") == []
+
+    def test_single_value(self):
+        assert _parse_comma_separated("localhost:*") == ["localhost:*"]
+        assert _parse_comma_separated("  localhost:*  ") == ["localhost:*"]
+
+    def test_multiple_values(self):
+        assert _parse_comma_separated("  localhost:* , 127.0.0.1:*  ") == [
+            "localhost:*",
+            "127.0.0.1:*",
+        ]
+
+    def test_empty_items_filtered(self):
+        assert _parse_comma_separated("localhost:*,,  ,127.0.0.1:*") == [
+            "localhost:*",
+            "127.0.0.1:*",
+        ]

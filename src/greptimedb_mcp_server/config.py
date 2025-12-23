@@ -234,22 +234,6 @@ class Config:
 
         args = parser.parse_args()
 
-        # Parse allowed_hosts: empty string means disabled, otherwise split
-        allowed_hosts_str = args.allowed_hosts.strip()
-        allowed_hosts = (
-            [h.strip() for h in allowed_hosts_str.split(",") if h.strip()]
-            if allowed_hosts_str
-            else []
-        )
-
-        # Parse allowed_origins: empty string means use defaults, otherwise split
-        allowed_origins_str = args.allowed_origins.strip()
-        allowed_origins = (
-            [o.strip() for o in allowed_origins_str.split(",") if o.strip()]
-            if allowed_origins_str
-            else []
-        )
-
         return Config(
             host=args.host,
             port=args.port,
@@ -266,6 +250,14 @@ class Config:
             listen_host=args.listen_host,
             listen_port=args.listen_port,
             audit_enabled=args.audit_enabled,
-            allowed_hosts=allowed_hosts,
-            allowed_origins=allowed_origins,
+            allowed_hosts=_parse_comma_separated(args.allowed_hosts),
+            allowed_origins=_parse_comma_separated(args.allowed_origins),
         )
+
+
+def _parse_comma_separated(value: str) -> list[str]:
+    """Parse a comma-separated string into a list of trimmed non-empty strings."""
+    value = value.strip()
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
