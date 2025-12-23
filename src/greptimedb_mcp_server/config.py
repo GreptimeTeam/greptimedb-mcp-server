@@ -84,6 +84,18 @@ class Config:
     Enable audit logging for all tool calls
     """
 
+    allowed_hosts: list[str]
+    """
+    Allowed hosts for DNS rebinding protection (for sse/streamable-http).
+    If empty, DNS rebinding protection is disabled.
+    """
+
+    allowed_origins: list[str]
+    """
+    Allowed origins for CORS (for sse/streamable-http).
+    Only used when DNS rebinding protection is enabled.
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -198,7 +210,30 @@ class Config:
             default=os.getenv("GREPTIMEDB_AUDIT_ENABLED", "true"),
         )
 
+        parser.add_argument(
+            "--allowed-hosts",
+            type=str,
+            help=(
+                "Allowed hosts for DNS rebinding protection (comma-separated). "
+                "If not set, DNS rebinding protection is disabled. "
+                "Example: localhost:*,127.0.0.1:*,my-service.namespace:*"
+            ),
+            default=os.getenv("GREPTIMEDB_ALLOWED_HOSTS", ""),
+        )
+
+        parser.add_argument(
+            "--allowed-origins",
+            type=str,
+            help=(
+                "Allowed origins for CORS (comma-separated). "
+                "Only used when allowed-hosts is set. "
+                "Example: http://localhost:*,https://my-app.example.com"
+            ),
+            default=os.getenv("GREPTIMEDB_ALLOWED_ORIGINS", ""),
+        )
+
         args = parser.parse_args()
+
         return Config(
             host=args.host,
             port=args.port,
@@ -215,4 +250,14 @@ class Config:
             listen_host=args.listen_host,
             listen_port=args.listen_port,
             audit_enabled=args.audit_enabled,
+            allowed_hosts=_parse_comma_separated(args.allowed_hosts),
+            allowed_origins=_parse_comma_separated(args.allowed_origins),
         )
+
+
+def _parse_comma_separated(value: str) -> list[str]:
+    """Parse a comma-separated string into a list of trimmed non-empty strings."""
+    value = value.strip()
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
