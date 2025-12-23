@@ -84,6 +84,8 @@ GREPTIMEDB_AUDIT_ENABLED=true  # Enable audit logging
 GREPTIMEDB_TRANSPORT=stdio     # stdio, sse, or streamable-http
 GREPTIMEDB_LISTEN_HOST=0.0.0.0 # HTTP server bind host
 GREPTIMEDB_LISTEN_PORT=8080    # HTTP server bind port
+GREPTIMEDB_ALLOWED_HOSTS=      # DNS rebinding protection (comma-separated)
+GREPTIMEDB_ALLOWED_ORIGINS=    # CORS allowed origins (comma-separated)
 ```
 
 ### CLI Arguments
@@ -112,6 +114,28 @@ greptimedb-mcp-server --transport streamable-http --listen-port 8080
 # SSE mode (legacy)
 greptimedb-mcp-server --transport sse --listen-port 3000
 ```
+
+#### DNS Rebinding Protection
+
+By default, DNS rebinding protection is **disabled** for compatibility with proxies, gateways, and Kubernetes services. To enable it, use `--allowed-hosts`:
+
+```bash
+# Enable DNS rebinding protection with allowed hosts
+greptimedb-mcp-server --transport streamable-http \
+  --allowed-hosts "localhost:*,127.0.0.1:*,my-service.namespace:*"
+
+# With custom allowed origins for CORS
+greptimedb-mcp-server --transport streamable-http \
+  --allowed-hosts "my-service.namespace:*" \
+  --allowed-origins "http://localhost:*,https://my-app.example.com"
+
+# Or via environment variables
+GREPTIMEDB_ALLOWED_HOSTS="localhost:*,my-service.namespace:*" \
+GREPTIMEDB_ALLOWED_ORIGINS="http://localhost:*" \
+  greptimedb-mcp-server --transport streamable-http
+```
+
+If you encounter `421 Invalid Host Header` errors, either disable protection (default) or add your host to the allowed list.
 
 ## Security
 

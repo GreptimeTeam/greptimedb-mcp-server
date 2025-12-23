@@ -40,6 +40,8 @@ def setup_state():
         listen_host="0.0.0.0",
         listen_port=8080,
         audit_enabled=False,
+        allowed_hosts=[],
+        allowed_origins=[],
     )
     # Set global config for get_config() calls
     server._config = config

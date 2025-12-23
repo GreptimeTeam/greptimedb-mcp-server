@@ -28,6 +28,7 @@ from urllib.parse import quote
 
 import aiohttp
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import TransportSecuritySettings
 from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
 
@@ -896,6 +897,31 @@ def main():
     if _config.transport != "stdio":
         mcp.settings.host = _config.listen_host
         mcp.settings.port = _config.listen_port
+
+        # Configure DNS rebinding protection
+        # If allowed_hosts is empty, disable protection for compatibility
+        # with proxies, gateways, and Kubernetes services
+        if _config.allowed_hosts:
+            security_kwargs = {
+                "enable_dns_rebinding_protection": True,
+                "allowed_hosts": _config.allowed_hosts,
+            }
+            if _config.allowed_origins:
+                security_kwargs["allowed_origins"] = _config.allowed_origins
+            mcp.settings.transport_security = TransportSecuritySettings(
+                **security_kwargs
+            )
+            logger.info(
+                f"DNS rebinding protection: enabled "
+                f"(allowed_hosts: {_config.allowed_hosts}, "
+                f"allowed_origins: {_config.allowed_origins or 'default'})"
+            )
+        else:
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False,
+            )
+            logger.info("DNS rebinding protection: disabled")
+
         logger.info(
             f"Starting MCP server with transport: {_config.transport} "
             f"on {_config.listen_host}:{_config.listen_port}"

@@ -84,6 +84,18 @@ class Config:
     Enable audit logging for all tool calls
     """
 
+    allowed_hosts: list[str]
+    """
+    Allowed hosts for DNS rebinding protection (for sse/streamable-http).
+    If empty, DNS rebinding protection is disabled.
+    """
+
+    allowed_origins: list[str]
+    """
+    Allowed origins for CORS (for sse/streamable-http).
+    Only used when DNS rebinding protection is enabled.
+    """
+
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -198,7 +210,46 @@ class Config:
             default=os.getenv("GREPTIMEDB_AUDIT_ENABLED", "true"),
         )
 
+        parser.add_argument(
+            "--allowed-hosts",
+            type=str,
+            help=(
+                "Allowed hosts for DNS rebinding protection (comma-separated). "
+                "If not set, DNS rebinding protection is disabled. "
+                "Example: localhost:*,127.0.0.1:*,my-service.namespace:*"
+            ),
+            default=os.getenv("GREPTIMEDB_ALLOWED_HOSTS", ""),
+        )
+
+        parser.add_argument(
+            "--allowed-origins",
+            type=str,
+            help=(
+                "Allowed origins for CORS (comma-separated). "
+                "Only used when allowed-hosts is set. "
+                "Example: http://localhost:*,https://my-app.example.com"
+            ),
+            default=os.getenv("GREPTIMEDB_ALLOWED_ORIGINS", ""),
+        )
+
         args = parser.parse_args()
+
+        # Parse allowed_hosts: empty string means disabled, otherwise split
+        allowed_hosts_str = args.allowed_hosts.strip()
+        allowed_hosts = (
+            [h.strip() for h in allowed_hosts_str.split(",") if h.strip()]
+            if allowed_hosts_str
+            else []
+        )
+
+        # Parse allowed_origins: empty string means use defaults, otherwise split
+        allowed_origins_str = args.allowed_origins.strip()
+        allowed_origins = (
+            [o.strip() for o in allowed_origins_str.split(",") if o.strip()]
+            if allowed_origins_str
+            else []
+        )
+
         return Config(
             host=args.host,
             port=args.port,
@@ -215,4 +266,6 @@ class Config:
             listen_host=args.listen_host,
             listen_port=args.listen_port,
             audit_enabled=args.audit_enabled,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
         )
