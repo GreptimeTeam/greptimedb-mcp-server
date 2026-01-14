@@ -72,11 +72,15 @@ def templates_loader() -> dict[str, dict[str, str]]:
         category_path = os.path.join(template_dir, category)
         if os.path.isdir(category_path):
             # Load config
-            with open(os.path.join(category_path, "config.yaml"), "r") as f:
+            with open(
+                os.path.join(category_path, "config.yaml"), "r", encoding="utf-8"
+            ) as f:
                 config = yaml.safe_load(f)
 
             # Load template
-            with open(os.path.join(category_path, "template.md"), "r") as f:
+            with open(
+                os.path.join(category_path, "template.md"), "r", encoding="utf-8"
+            ) as f:
                 template = f.read()
 
             templates[category] = {"config": config, "template": template}
