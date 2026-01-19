@@ -1,5 +1,13 @@
 """GreptimeDB MCP Server using FastMCP API."""
 
+import asyncio
+import sys
+
+# Windows: use SelectorEventLoop for HTTP transports (signal handling),
+# but keep ProactorEventLoop for stdio (pipe I/O support)
+if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-http")):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
 from greptimedb_mcp_server.utils import (
@@ -15,7 +23,6 @@ from greptimedb_mcp_server.utils import (
     audit_log,
 )
 
-import asyncio
 import json
 import logging
 import re
