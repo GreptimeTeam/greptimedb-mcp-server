@@ -1,6 +1,9 @@
 import asyncio
 import sys
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 if "-m" not in sys.argv:
     from . import server
 
