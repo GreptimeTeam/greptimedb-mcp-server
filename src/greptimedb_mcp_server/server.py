@@ -241,6 +241,10 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchmany(limit)
                 has_more = cursor.fetchone() is not None
+                if has_more:
+                    # MySQL connector requires all results consumed before connection reuse
+                    while cursor.fetchone():
+                        pass
                 return {
                     "type": "query",
                     "columns": columns,
