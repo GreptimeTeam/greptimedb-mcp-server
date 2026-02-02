@@ -592,18 +592,34 @@ async def test_create_pipeline_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_dryrun_pipeline_invalid_name():
-    """Test dryrun_pipeline with invalid name"""
+async def test_dryrun_pipeline_invalid_pipeline_name():
+    """Test dryrun_pipeline with invalid pipeline name"""
     with pytest.raises(ValueError) as excinfo:
         await dryrun_pipeline(pipeline_name="123-invalid", data='{"message": "test"}')
     assert "Invalid pipeline name" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_dryrun_pipeline_invalid_json():
-    """Test dryrun_pipeline with invalid JSON data"""
-    result = await dryrun_pipeline(pipeline_name="test_pipeline", data="invalid json")
-    assert "Error: Invalid JSON data" in result
+async def test_dryrun_pipeline_missing_data():
+    """Test dryrun_pipeline without required data parameter"""
+    result = await dryrun_pipeline(pipeline="version: 2", data="")
+    assert "Error: data parameter is required" in result
+
+
+@pytest.mark.asyncio
+async def test_dryrun_pipeline_both_pipeline_and_name():
+    """Test dryrun_pipeline with both pipeline and pipeline_name (should error)"""
+    result = await dryrun_pipeline(
+        pipeline="version: 2", pipeline_name="test_pipeline", data='{"message": "test"}'
+    )
+    assert "Error: Provide either 'pipeline' or 'pipeline_name', not both" in result
+
+
+@pytest.mark.asyncio
+async def test_dryrun_pipeline_neither_pipeline_nor_name():
+    """Test dryrun_pipeline without pipeline or pipeline_name (should error)"""
+    result = await dryrun_pipeline(data='{"message": "test"}')
+    assert "Error: Provide either 'pipeline' or 'pipeline_name'" in result
 
 
 @pytest.mark.asyncio

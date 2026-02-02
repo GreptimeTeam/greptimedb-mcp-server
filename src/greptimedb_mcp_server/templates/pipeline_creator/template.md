@@ -132,31 +132,42 @@ transform:
 
 Generate a complete, valid YAML pipeline configuration. After generation:
 1. Use `create_pipeline` tool to create the pipeline
-2. Use `dryrun_pipeline` tool to verify with sample data
+2. Use `dryrun_pipeline` tool with inline pipeline YAML to verify with sample data
 
 **Note**: You can update an existing pipeline by calling `create_pipeline` with the same name. Each call creates a new version. Use `list_pipelines` to view all versions, and `delete_pipeline` to remove specific versions.
 
 ## Testing with dryrun_pipeline
 
-The `dryrun_pipeline` tool accepts JSON data in the following formats:
+Use `dryrun_pipeline` with separated parameters:
 
-**Single log entry (JSON object with "message" field for plain text logs):**
-```json
-{"message": "127.0.0.1 - - [25/May/2024:20:16:37 +0000] \"GET /index.html HTTP/1.1\" 200 612"}
+**Example with inline pipeline YAML:**
+```python
+dryrun_pipeline(
+    pipeline='''version: 2
+processors:
+  - date:
+      fields:
+        - timestamp
+      formats:
+        - '%Y-%m-%dT%H:%M:%SZ' ''',
+    data='{"timestamp": "2024-05-25T20:16:37Z", "level": "INFO"}',
+    data_type='application/json'
+)
 ```
 
-**Multiple log entries (JSON array):**
-```json
-[
-  {"message": "127.0.0.1 - - [25/May/2024:20:16:37 +0000] \"GET /index.html HTTP/1.1\" 200 612"},
-  {"message": "192.168.1.1 - - [25/May/2024:20:17:37 +0000] \"POST /api/login HTTP/1.1\" 200 1784"}
-]
+**Example with saved pipeline:**
+```python
+dryrun_pipeline(
+    pipeline_name='my_log_pipeline',
+    data='{"message": "127.0.0.1 - - [25/May/2024:20:16:37 +0000]"}',
+    data_type='application/x-ndjson'
+)
 ```
 
-**Structured JSON logs (fields map directly to pipeline input):**
-```json
-{"timestamp": "2024-05-25 20:16:37", "level": "INFO", "service": "api", "message": "Request processed"}
-```
+**Data Formats:**
+- **Single log entry:** `{"message": "127.0.0.1 - - [25/May/2024:20:16:37 +0000]"}`
+- **Multiple entries (JSON array):** `[{"message": "log1"}, {"message": "log2"}]`
+- **NDJSON (newline-delimited):** Use `data_type='application/x-ndjson'` with data like `"{"msg":"line1"}\n{"msg":"line2"}"`
 
 ## Common Log Format Examples
 
@@ -213,6 +224,8 @@ Pattern: `%{timestamp} %{hostname} %{app}[%{pid}]: %{message}`
 ## Troubleshooting
 
 If `dryrun_pipeline` fails:
+- **Missing required parameters**: Ensure you provide `data` and exactly one of `pipeline` or `pipeline_name`
+- **Both pipeline and pipeline_name provided**: Only provide one of them
 - **Pattern mismatch**: Check if dissect/regex pattern matches the log format exactly
 - **Date format error**: Verify the date format string matches the timestamp in logs
 - **Missing fields**: Use `ignore_missing: true` in processors to handle optional fields
@@ -230,11 +243,11 @@ curl -X POST "http://localhost:4000/v1/pipelines/my_pipeline" \
   -H "Content-Type: application/x-yaml" \
   -d @pipeline.yaml
 
-# Dryrun pipeline
+# Dryrun pipeline (constructs JSON request internally)
 curl -X POST "http://localhost:4000/v1/pipelines/_dryrun" \
   -u "<username>:<password>" \
   -H "Content-Type: application/json" \
-  -d '{"pipeline_name": "my_pipeline", "data": "{\"message\": \"test log entry\"}"}'
+  -d '{"pipeline": "version: 2", "data": "{\"timestamp\": \"2024-05-25T20:16:37Z\"}", "data_type": "application/json"}'
 
 # Delete pipeline
 curl -X DELETE "http://localhost:4000/v1/pipelines/my_pipeline?version=<version>" \

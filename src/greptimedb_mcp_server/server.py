@@ -374,7 +374,7 @@ async def execute_tql(
     ],
     end: Annotated[
         str,
-        "End time: SQL expression (e.g., 'now()'), " "RFC3339, or Unix timestamp",
+        "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp",
     ],
     step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
     lookback: Annotated[str | None, "Lookback delta for range queries"] = None,
@@ -722,16 +722,14 @@ async def create_pipeline(
                     pipelines = result.get("pipelines", [])
                     version = pipelines[0]["version"] if pipelines else "unknown"
                     return (
-                        f"Pipeline '{name}' created successfully.\n"
-                        f"Version: {version}"
+                        f"Pipeline '{name}' created successfully.\nVersion: {version}"
                     )
                 except (json.JSONDecodeError, KeyError, IndexError):
                     return f"Pipeline '{name}' created successfully."
             else:
                 error_detail = response_text if response_text else "No details"
                 return (
-                    f"Error creating pipeline (HTTP {response.status}): "
-                    f"{error_detail}"
+                    f"Error creating pipeline (HTTP {response.status}): {error_detail}"
                 )
 
     except aiohttp.ClientError as e:
@@ -741,24 +739,59 @@ async def create_pipeline(
 
 @mcp.tool()
 async def dryrun_pipeline(
-    pipeline_name: Annotated[str, "Name of the pipeline to test"],
-    data: Annotated[str, "Test data in JSON format (single object or array)"],
+    pipeline: Annotated[
+        str | None,
+        "Pipeline configuration in YAML format (inline). Provide this to test a pipeline without saving it.",
+    ] = None,
+    pipeline_name: Annotated[
+        str | None,
+        "Name of the saved pipeline to test. Provide either 'pipeline' or 'pipeline_name', not both.",
+    ] = None,
+    data: Annotated[
+        str, "Test data in JSON or NDJSON format (single object or array)"
+    ] = "",
+    data_type: Annotated[
+        str | None,
+        "Content type of the data (e.g., 'application/x-ndjson'). If omitted, GreptimeDB will use default.",
+    ] = None,
 ) -> str:
-    """Test a pipeline with sample data without writing to the database."""
-    state = get_state()
-    pipeline_name = _validate_pipeline_name(pipeline_name)
+    """Test a pipeline with sample data without writing to the database.
 
-    try:
-        parsed = json.loads(data)
-        normalized_data = json.dumps(parsed, ensure_ascii=False)
-    except json.JSONDecodeError as e:
-        return f"Error: Invalid JSON data: {str(e)}"
+    You can test a pipeline in two ways:
+    - Provide 'pipeline' with inline YAML configuration
+    - Provide 'pipeline_name' to test a previously saved pipeline
+
+    Args:
+        pipeline: Pipeline YAML configuration (inline)
+        pipeline_name: Name of saved pipeline (mutually exclusive with pipeline)
+        data: Test data in JSON/NDJSON format
+        data_type: Optional content type (e.g., 'application/x-ndjson')
+    """
+    state = get_state()
+
+    if not data or not data.strip():
+        return "Error: data parameter is required"
+
+    if pipeline is not None and pipeline_name is not None:
+        return "Error: Provide either 'pipeline' or 'pipeline_name', not both"
+
+    if pipeline is None and pipeline_name is None:
+        return "Error: Provide either 'pipeline' or 'pipeline_name'"
+
+    if pipeline_name is not None:
+        pipeline_name = _validate_pipeline_name(pipeline_name)
 
     url = f"{state.http_base_url}/v1/pipelines/_dryrun"
-    request_body = {
-        "pipeline_name": pipeline_name,
-        "data": normalized_data,
-    }
+    request_body = {"data": data}
+
+    if data_type:
+        request_body["data_type"] = data_type
+
+    if pipeline is not None:
+        request_body["pipeline"] = pipeline
+    elif pipeline_name is not None:
+        request_body["pipeline_name"] = pipeline_name
+
     auth = state.get_http_auth()
     logger.debug(f"Dryrun request URL: {url}")
     logger.debug(f"Dryrun request body: {request_body}")
@@ -780,12 +813,11 @@ async def dryrun_pipeline(
             else:
                 error_detail = response_text if response_text else "No details"
                 return (
-                    f"Error testing pipeline (HTTP {response.status}): "
-                    f"{error_detail}"
+                    f"Error testing pipeline (HTTP {response.status}): {error_detail}"
                 )
 
     except aiohttp.ClientError as e:
-        logger.error(f"HTTP error testing pipeline '{pipeline_name}': {e}")
+        logger.error(f"HTTP error testing pipeline: {e}")
         return f"Error testing pipeline: {str(e)}"
 
 
@@ -813,8 +845,7 @@ async def delete_pipeline(
             else:
                 error_detail = response_text if response_text else "No details"
                 return (
-                    f"Error deleting pipeline (HTTP {response.status}): "
-                    f"{error_detail}"
+                    f"Error deleting pipeline (HTTP {response.status}): {error_detail}"
                 )
 
     except aiohttp.ClientError as e:

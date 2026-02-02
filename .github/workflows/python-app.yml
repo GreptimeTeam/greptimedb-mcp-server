@@ -24,6 +24,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install the latest version of uv
       uses: astral-sh/setup-uv@v5
+    - run: uv python pin cp311
     - name: Install dependencies
       run: uv sync
     - name: Format
