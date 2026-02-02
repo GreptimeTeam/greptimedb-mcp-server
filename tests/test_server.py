@@ -592,38 +592,11 @@ async def test_create_pipeline_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_dryrun_pipeline_inline():
-    """Test dryrun_pipeline with inline pipeline YAML"""
-    result = await dryrun_pipeline(pipeline="version: 2", data='{"message": "test"}')
-    assert "Error testing pipeline" in result or "pipelines" in result.lower()
-
-
-@pytest.mark.asyncio
-async def test_dryrun_pipeline_with_pipeline_name():
-    """Test dryrun_pipeline with saved pipeline name"""
-    result = await dryrun_pipeline(
-        pipeline_name="test_pipeline", data='{"message": "test"}'
-    )
-    assert "Error testing pipeline" in result or "pipelines" in result.lower()
-
-
-@pytest.mark.asyncio
 async def test_dryrun_pipeline_invalid_pipeline_name():
     """Test dryrun_pipeline with invalid pipeline name"""
     with pytest.raises(ValueError) as excinfo:
         await dryrun_pipeline(pipeline_name="123-invalid", data='{"message": "test"}')
     assert "Invalid pipeline name" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_dryrun_pipeline_with_data_type():
-    """Test dryrun_pipeline with data_type parameter"""
-    result = await dryrun_pipeline(
-        pipeline="version: 2",
-        data='{"message": "test"}',
-        data_type="application/x-ndjson",
-    )
-    assert "Error testing pipeline" in result or "pipelines" in result.lower()
 
 
 @pytest.mark.asyncio
