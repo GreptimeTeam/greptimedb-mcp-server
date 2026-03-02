@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.GreptimeTeam/greptimedb-mcp-server",
-  "description": "MCP server for GreptimeDB — query and analyze metrics, logs, and traces using SQL, TQL (PromQL-compatible), and RANGE queries, with read-only enforcement, data masking, and prompt templates for observability analysis.",
+  "description": "Query and analyze GreptimeDB metrics, logs and traces via SQL, TQL and RANGE queries.",
   "repository": {
     "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
     "source": "github"
