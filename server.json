@@ -1,0 +1,126 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.GreptimeTeam/greptimedb-mcp-server",
+  "description": "MCP server for GreptimeDB — query and analyze metrics, logs, and traces using SQL, TQL (PromQL-compatible), and RANGE queries, with read-only enforcement, data masking, and prompt templates for observability analysis.",
+  "repository": {
+    "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
+    "source": "github"
+  },
+  "version": "0.4.7",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "greptimedb-mcp-server",
+      "version": "0.4.7",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--host",
+          "description": "GreptimeDB host address",
+          "isRequired": false,
+          "valueHint": "localhost"
+        },
+        {
+          "type": "named",
+          "name": "--port",
+          "description": "GreptimeDB MySQL protocol port",
+          "isRequired": false,
+          "valueHint": "4002"
+        },
+        {
+          "type": "named",
+          "name": "--database",
+          "description": "Database name to connect to",
+          "isRequired": false,
+          "valueHint": "public"
+        },
+        {
+          "type": "named",
+          "name": "--user",
+          "description": "Database username",
+          "isRequired": false
+        },
+        {
+          "type": "named",
+          "name": "--password",
+          "description": "Database password",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "type": "named",
+          "name": "--timezone",
+          "description": "Session timezone",
+          "isRequired": false,
+          "valueHint": "UTC"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "GREPTIMEDB_HOST",
+          "description": "GreptimeDB host address",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_PORT",
+          "description": "GreptimeDB MySQL protocol port (default: 4002)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_USER",
+          "description": "Database username",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_PASSWORD",
+          "description": "Database password",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "GREPTIMEDB_DATABASE",
+          "description": "Database name to connect to",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_TIMEZONE",
+          "description": "Session timezone (default: UTC)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_POOL_SIZE",
+          "description": "Connection pool size (default: 5)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_HTTP_PORT",
+          "description": "HTTP API port for pipeline management (default: 4000)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_HTTP_PROTOCOL",
+          "description": "HTTP protocol for pipeline API: http or https (default: http)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_MASK_ENABLED",
+          "description": "Enable sensitive data masking (default: true)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_MASK_PATTERNS",
+          "description": "Additional column name patterns for data masking (comma-separated)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_AUDIT_ENABLED",
+          "description": "Enable audit logging for tool invocations (default: true)",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
