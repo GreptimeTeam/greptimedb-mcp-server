@@ -2,7 +2,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/greptimedb-mcp-server)](https://pypi.org/project/greptimedb-mcp-server/)
 ![build workflow](https://github.com/GreptimeTeam/greptimedb-mcp-server/actions/workflows/python-app.yml/badge.svg)
-[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue)](https://registry.modelcontextprotocol.io/servers/io.github.GreptimeTeam%2Fgreptimedb-mcp-server)
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue)](https://registry.modelcontextprotocol.io/?q=io.github.GreptimeTeam%2Fgreptimedb-mcp-server)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
 A Model Context Protocol (MCP) server for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) — an open-source observability database that handles metrics, logs, and traces in one engine.
