@@ -56,6 +56,14 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 | `dryrun_pipeline` | Test a pipeline with sample data without writing to database |
 | `delete_pipeline` | Delete a specific version of a pipeline |
 
+### Dashboard Management
+
+| Tool | Description |
+|------|-------------|
+| `list_dashboards` | List all Perses dashboard definitions |
+| `create_dashboard` | Create or update a Perses dashboard definition |
+| `delete_dashboard` | Delete a dashboard definition |
+
 ### Resources & Prompts
 
 - **Resources**: Browse tables via `greptime://<table>/data` URIs
@@ -76,7 +84,7 @@ GREPTIMEDB_DATABASE=public     # Database name
 GREPTIMEDB_TIMEZONE=UTC        # Session timezone
 
 # Optional
-GREPTIMEDB_HTTP_PORT=4000      # HTTP API port for pipeline management
+GREPTIMEDB_HTTP_PORT=4000      # HTTP API port for pipeline/dashboard management
 GREPTIMEDB_HTTP_PROTOCOL=http  # HTTP protocol (http/https)
 GREPTIMEDB_POOL_SIZE=5         # Connection pool size
 GREPTIMEDB_MASK_ENABLED=true   # Enable sensitive data masking

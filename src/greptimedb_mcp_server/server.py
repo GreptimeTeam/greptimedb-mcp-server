@@ -853,6 +853,115 @@ async def delete_pipeline(
         return f"Error deleting pipeline: {str(e)}"
 
 
+DASHBOARD_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_\-]*$")
+
+
+def _validate_dashboard_name(name: str) -> str:
+    """Validate dashboard name format."""
+    if not name:
+        raise ValueError("Dashboard name is required")
+    if not DASHBOARD_NAME_PATTERN.match(name):
+        raise ValueError(
+            "Invalid dashboard name: must start with letter or underscore, "
+            "contain only alphanumeric characters, underscores, and hyphens"
+        )
+    return name
+
+
+@mcp.tool()
+async def list_dashboards() -> str:
+    """List all Perses dashboard definitions stored in GreptimeDB."""
+    state = get_state()
+    url = f"{state.http_base_url}/v1/dashboards"
+    auth = state.get_http_auth()
+
+    try:
+        async with state.http_session.get(url, auth=auth) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                try:
+                    result = json.loads(response_text)
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    return response_text
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error listing dashboards (HTTP {response.status}): {error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error listing dashboards: {e}")
+        return f"Error listing dashboards: {str(e)}"
+
+
+@mcp.tool()
+async def create_dashboard(
+    name: Annotated[str, "Name of the dashboard"],
+    definition: Annotated[str, "Perses dashboard definition in JSON format"],
+) -> str:
+    """Create or update a Perses dashboard definition in GreptimeDB."""
+    state = get_state()
+    name = _validate_dashboard_name(name)
+
+    url = f"{state.http_base_url}/v1/dashboards/{quote(name)}"
+    auth = state.get_http_auth()
+
+    try:
+        json_definition = json.loads(definition)
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid JSON definition: {str(e)}"
+
+    try:
+        async with state.http_session.post(
+            url,
+            json=json_definition,
+            auth=auth,
+        ) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                return f"Dashboard '{name}' saved successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error creating dashboard (HTTP {response.status}): {error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error creating dashboard '{name}': {e}")
+        return f"Error creating dashboard: {str(e)}"
+
+
+@mcp.tool()
+async def delete_dashboard(
+    name: Annotated[str, "Name of the dashboard to delete"],
+) -> str:
+    """Delete a Perses dashboard definition from GreptimeDB."""
+    state = get_state()
+    name = _validate_dashboard_name(name)
+
+    url = f"{state.http_base_url}/v1/dashboards/{quote(name)}"
+    auth = state.get_http_auth()
+
+    try:
+        async with state.http_session.delete(url, auth=auth) as response:
+            response_text = await response.text()
+
+            if response.status == 200:
+                return f"Dashboard '{name}' deleted successfully."
+            else:
+                error_detail = response_text if response_text else "No details"
+                return (
+                    f"Error deleting dashboard (HTTP {response.status}): {error_detail}"
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error deleting dashboard '{name}': {e}")
+        return f"Error deleting dashboard: {str(e)}"
+
+
 def _register_prompts():
     """Register prompts from templates."""
     templates = templates_loader()

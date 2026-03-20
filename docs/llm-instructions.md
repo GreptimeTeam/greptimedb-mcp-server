@@ -21,7 +21,12 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 - `dryrun_pipeline`: Test pipeline with sample data without writing
 - `delete_pipeline`: Remove a pipeline version
 
-**Note**: All HTTP API calls (pipeline tools) require authentication. The MCP server handles auth automatically using configured credentials. When providing curl examples to users, always include `-u <username>:<password>`.
+### Dashboard Management
+- `list_dashboards`: View all Perses dashboard definitions
+- `create_dashboard`: Create/update a Perses dashboard with JSON definition
+- `delete_dashboard`: Remove a dashboard definition
+
+**Note**: All HTTP API calls (pipeline and dashboard tools) require authentication. The MCP server handles auth automatically using configured credentials. When providing curl examples to users, always include `-u <username>:<password>`.
 
 ## Available Prompts
 Use these prompts for specialized tasks:
@@ -35,9 +40,10 @@ Use these prompts for specialized tasks:
 
 ## Workflow Tips
 1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `create_pipeline` → `dryrun_pipeline` to verify
-2. For data analysis: `describe_table` first → understand schema → `execute_sql` or `execute_tql`
-3. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
-4. Always check `health_check` if queries fail unexpectedly
+2. For dashboard creation: Prepare Perses JSON definition → `create_dashboard` → verify with `list_dashboards`
+3. For data analysis: `describe_table` first → understand schema → `execute_sql` or `execute_tql`
+4. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
+5. Always check `health_check` if queries fail unexpectedly
 ```
 
 ## Using Prompts in Claude Desktop
