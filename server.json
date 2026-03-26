@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.GreptimeTeam/greptimedb-mcp-server",
-  "description": "Query and analyze GreptimeDB metrics, logs and traces via SQL, TQL and RANGE queries.",
+  "description": "Query and analyze GreptimeDB metrics, logs and traces via SQL, TQL and RANGE queries. Manage pipelines and Perses dashboards.",
   "repository": {
     "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
     "source": "github"
@@ -97,12 +97,12 @@
         },
         {
           "name": "GREPTIMEDB_HTTP_PORT",
-          "description": "HTTP API port for pipeline management (default: 4000)",
+          "description": "HTTP API port for pipeline/dashboard management (default: 4000)",
           "isRequired": false
         },
         {
           "name": "GREPTIMEDB_HTTP_PROTOCOL",
-          "description": "HTTP protocol for pipeline API: http or https (default: http)",
+          "description": "HTTP protocol for pipeline/dashboard API: http or https (default: http)",
           "isRequired": false
         },
         {

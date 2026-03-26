@@ -17,6 +17,10 @@ from greptimedb_mcp_server.server import (
     dryrun_pipeline,
     delete_pipeline,
     _validate_pipeline_name,
+    _validate_dashboard_name,
+    list_dashboards,
+    create_dashboard,
+    delete_dashboard,
 )
 from greptimedb_mcp_server.utils import templates_loader
 
@@ -67,6 +71,7 @@ def setup_state():
         http_base_url=f"http://{config.host}:{config.http_port}",
         mask_enabled=config.mask_enabled,
         mask_patterns=[],
+        http_session=None,
     )
 
     yield
@@ -635,3 +640,58 @@ async def test_delete_pipeline_missing_version():
     """Test delete_pipeline with missing version"""
     result = await delete_pipeline(name="test_pipeline", version="")
     assert "Error: version is required" in result
+
+
+# Dashboard tools tests
+
+
+def test_validate_dashboard_name_valid():
+    """Test valid dashboard names"""
+    assert _validate_dashboard_name("test_dashboard") == "test_dashboard"
+    assert _validate_dashboard_name("Dashboard1") == "Dashboard1"
+    assert _validate_dashboard_name("_private") == "_private"
+    assert _validate_dashboard_name("a") == "a"
+    assert _validate_dashboard_name("test-dashboard") == "test-dashboard"
+    assert _validate_dashboard_name("dash_board-123") == "dash_board-123"
+
+
+def test_validate_dashboard_name_invalid():
+    """Test invalid dashboard names"""
+    with pytest.raises(ValueError) as excinfo:
+        _validate_dashboard_name("")
+    assert "Dashboard name is required" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_dashboard_name("123invalid")
+    assert "Invalid dashboard name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_dashboard_name("test.dashboard")
+    assert "Invalid dashboard name" in str(excinfo.value)
+
+    with pytest.raises(ValueError) as excinfo:
+        _validate_dashboard_name("test dashboard")
+    assert "Invalid dashboard name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_create_dashboard_invalid_name():
+    """Test create_dashboard with invalid name"""
+    with pytest.raises(ValueError) as excinfo:
+        await create_dashboard(name="123.invalid", definition='{"kind": "Dashboard"}')
+    assert "Invalid dashboard name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_create_dashboard_invalid_json():
+    """Test create_dashboard with invalid JSON"""
+    result = await create_dashboard(name="test_dashboard", definition="not valid json")
+    assert "Error: Invalid JSON definition" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_dashboard_invalid_name():
+    """Test delete_dashboard with invalid name"""
+    with pytest.raises(ValueError) as excinfo:
+        await delete_dashboard(name="123.invalid")
+    assert "Invalid dashboard name" in str(excinfo.value)
