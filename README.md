@@ -11,6 +11,10 @@ A Model Context Protocol (MCP) server for [GreptimeDB](https://github.com/Grepti
 
 Enables AI assistants to query and analyze GreptimeDB using SQL, TQL (PromQL-compatible), and RANGE queries, with built-in security features like read-only enforcement and data masking.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/greptimeteam-greptimedb-mcp-server).
+
 ## Quick Start
 
 ```bash
