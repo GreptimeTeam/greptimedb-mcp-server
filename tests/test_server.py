@@ -173,12 +173,116 @@ async def test_execute_sql_union_allowed():
 
 @pytest.mark.asyncio
 async def test_describe_table():
-    """Test describe_table tool"""
+    """Test describe_table tool returns schema, semantics, samples, and guidance."""
     result = await describe_table(table="users")
+    data = json.loads(result)
 
-    assert "Column" in result
-    assert "Type" in result
-    assert "|" in result
+    assert data["table"] == "users"
+    assert data["table_schema"] == "testdb"
+    assert data["schema"]["time_index"] == "ts"
+    assert data["schema"]["primary_keys"] == ["id"]
+    assert data["schema"]["columns"][0]["name"] == "id"
+    assert data["semantics"]["available"] is True
+    assert data["semantics"]["found"] is True
+    assert data["semantics"]["signal_type"] == "metric"
+    assert data["semantics"]["options"]["metric.type"] == "counter"
+    assert data["samples"]["included"] is True
+    assert data["samples"]["strategy"] == "latest_by_time_index"
+    assert data["samples"]["limit"] == 5
+    assert len(data["samples"]["rows"]) == 2
+    assert data["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_describe_table_without_samples():
+    """Test describe_table can skip sample rows."""
+    result = await describe_table(table="users", include_samples=False)
+    data = json.loads(result)
+
+    assert data["samples"]["included"] is False
+    assert data["semantics"]["found"] is True
+
+
+@pytest.mark.asyncio
+async def test_describe_table_without_semantics():
+    """Test describe_table can skip table semantic metadata."""
+    result = await describe_table(table="users", include_semantics=False)
+    data = json.loads(result)
+
+    assert data["semantics"]["included"] is False
+    assert data["samples"]["included"] is True
+
+
+@pytest.mark.asyncio
+async def test_describe_table_without_semantic_row():
+    """Test describe_table when table_semantics exists but the table has no row."""
+    result = await describe_table(table="orders")
+    data = json.loads(result)
+
+    assert data["semantics"]["available"] is True
+    assert data["semantics"]["found"] is False
+    assert "No table semantic metadata was found" in data["guidance"][0]
+
+
+@pytest.mark.asyncio
+async def test_describe_table_semantics_unavailable():
+    """Test describe_table gracefully handles old versions without table_semantics."""
+
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+            self._results = []
+
+        def execute(self, query, args=None):
+            self.query = query
+            if "information_schema.table_semantics" in query:
+                raise server.Error("table not found")
+            if "information_schema.columns" in query:
+                self._results = [
+                    ("id", "Int64", "TAG", "NO"),
+                    ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
+                ]
+            elif "SELECT * FROM" in query:
+                self._results = [(1, "2024-01-01 00:00:00")]
+
+        def fetchall(self):
+            return self._results
+
+        def fetchone(self):
+            return None
+
+        @property
+        def description(self):
+            if "SELECT * FROM" in self.query:
+                return [("id", None), ("ts", None)]
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await describe_table(table="users")
+    data = json.loads(result)
+
+    assert data["schema"]["time_index"] == "ts"
+    assert data["semantics"]["available"] is False
+    assert data["semantics"]["found"] is False
+    assert data["samples"]["included"] is True
 
 
 @pytest.mark.asyncio
@@ -472,8 +576,18 @@ async def test_read_table_resource_invalid_name():
 async def test_describe_table_schema_qualified():
     """Test describe_table with schema.table format"""
     result = await describe_table(table="public.users")
-    assert "Column" in result
-    assert "Type" in result
+    data = json.loads(result)
+    assert data["table_schema"] == "public"
+    assert data["table_name"] == "users"
+    assert data["schema"]["time_index"] == "ts"
+
+
+@pytest.mark.asyncio
+async def test_describe_table_sample_limit_clamped():
+    """Test describe_table clamps sample limit."""
+    result = await describe_table(table="users", sample_limit=100)
+    data = json.loads(result)
+    assert data["samples"]["limit"] == 20
 
 
 @pytest.mark.asyncio

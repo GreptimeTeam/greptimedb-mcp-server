@@ -34,6 +34,18 @@ def mock_db_connection():
         yield mock_connect
 
 
+@pytest.fixture(autouse=True)
+def reset_sse_app_status():
+    """Reset sse-starlette global state between pytest-asyncio event loops."""
+    from sse_starlette.sse import AppStatus
+
+    AppStatus.should_exit = False
+    AppStatus.should_exit_event = None
+    yield
+    AppStatus.should_exit = False
+    AppStatus.should_exit_event = None
+
+
 class TestStreamableHttpTransport:
     """Tests for streamable-http transport mode."""
 
