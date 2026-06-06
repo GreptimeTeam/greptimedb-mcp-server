@@ -286,6 +286,52 @@ async def test_describe_table_semantics_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_describe_table_not_found():
+    """Test describe_table surfaces a clear error when no columns are visible."""
+
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+
+        def execute(self, query, args=None):
+            self.query = query
+
+        def fetchall(self):
+            return []
+
+        @property
+        def description(self):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await describe_table(table="ghost")
+    data = json.loads(result)
+
+    assert data["schema"]["columns"] == []
+    assert "not found" in data["error"]
+    assert "semantics" not in data
+    assert "samples" not in data
+
+
+@pytest.mark.asyncio
 async def test_describe_table_invalid_name():
     """Test describe_table with invalid table name"""
     with pytest.raises(ValueError) as excinfo:

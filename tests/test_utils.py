@@ -222,6 +222,21 @@ def test_format_results_json():
     assert data[0]["b"] == 2
 
 
+def test_format_results_json_non_native_values():
+    """Test JSON format handles non-JSON-native values without crashing."""
+    from decimal import Decimal
+
+    result = format_results(
+        ["amount", "payload"],
+        [(Decimal("3.14"), b"\x00\x01")],
+        "json",
+        mask_enabled=False,
+    )
+    data = json.loads(result)
+    assert data[0]["amount"] == "3.14"
+    assert data[0]["payload"] == "b'\\x00\\x01'"
+
+
 def test_format_results_markdown():
     """Test format_results with markdown format"""
     result = format_results(["a", "b"], [(1, 2)], "markdown")
