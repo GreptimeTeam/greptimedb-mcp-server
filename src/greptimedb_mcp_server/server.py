@@ -21,6 +21,7 @@ from greptimedb_mcp_server.utils import (
     validate_time_expression,
     format_tql_time_param,
     audit_log,
+    render_prompt_template,
 )
 
 import json
@@ -986,19 +987,28 @@ def _register_prompts():
             continue
 
         arg_params = ", ".join(
-            f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
-            for arg_name, arg_desc, _ in arg_info
+            (
+                f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
+                if required
+                else f"{arg_name}: Annotated[str, {repr(arg_desc)}] = ''"
+            )
+            for arg_name, arg_desc, required in arg_info
         )
 
         arg_tuples = ", ".join(f'("{n}", {n})' for n, _, _ in arg_info)
+        if arg_params:
+            arg_params = f"*, {arg_params}"
+
         func_code = f"""
 def prompt_fn({arg_params}) -> str:
-    result = template_content
-    for key, value in [{arg_tuples}]:
-        result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
-    return result
+    context = dict([{arg_tuples}])
+    return render_prompt_template(template_content, context)
 """
-        namespace = {"template_content": template_content, "Annotated": Annotated}
+        namespace = {
+            "template_content": template_content,
+            "Annotated": Annotated,
+            "render_prompt_template": render_prompt_template,
+        }
         exec(func_code, namespace)
         prompt_fn = namespace["prompt_fn"]
         prompt_fn.__doc__ = description

@@ -1,0 +1,19 @@
+description: "Tune GreptimeDB SQL, TQL, and RANGE queries using execution plans and table metadata."
+version: "1.0"
+arguments:
+  - name: "query"
+    description: "SQL, TQL, or PromQL-style query to analyze."
+    required: true
+  - name: "table"
+    description: "Optional primary table involved in the query."
+    required: false
+  - name: "symptom"
+    description: "Optional performance symptom, such as slow query, high scan cost, or timeout."
+    required: false
+metadata:
+  tags:
+    - performance
+    - explain
+    - query-tuning
+  suggested_use: "Analyze slow queries and choose better SQL, TQL, or RANGE query shapes."
+  output_format: "markdown"

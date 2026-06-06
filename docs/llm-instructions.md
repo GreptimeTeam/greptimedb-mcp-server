@@ -26,24 +26,28 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 - `create_dashboard`: Create/update a Perses dashboard with JSON definition
 - `delete_dashboard`: Remove a dashboard definition
 
-**Note**: All HTTP API calls (pipeline and dashboard tools) require authentication. The MCP server handles auth automatically using configured credentials. When providing curl examples to users, always include `-u <username>:<password>`.
+**Note**: The MCP server handles HTTP API authentication automatically using configured credentials. When providing curl examples to users, include `-u <username>:<password>` only when GreptimeDB authentication is enabled.
 
 ## Available Prompts
 Use these prompts for specialized tasks:
 - `pipeline_creator`: Generate pipeline YAML from log samples - use when user provides log examples
-- `log_pipeline`: Log analysis with full-text search
-- `metrics_analysis`: Metrics monitoring and analysis
-- `promql_analysis`: PromQL-style queries
-- `iot_monitoring`: IoT device data analysis
-- `trace_analysis`: Distributed tracing analysis
-- `table_operation`: Table diagnostics and optimization
+- `log_pipeline`: Query and aggregate an existing log table
+- `metrics_analysis`: SQL and RANGE analysis for existing time-series tables
+- `promql_analysis`: TQL/PromQL expression help only
+- `trace_analysis`: Query one trace table or drill into trace latency/errors
+- `table_operation`: Inspect table schema, regions, storage, and cluster metadata
+- `schema_design_advisor`: Design schema, primary key, indexes, append mode, and partitioning
+- `observability_correlation`: Pivot across already identified metrics, logs, and traces
+- `ingestion_troubleshooting`: Debug ingestion, schema, timestamp, and pipeline write issues
+- `query_performance_tuning`: Analyze slow SQL, TQL, and RANGE queries from execution plans
 
 ## Workflow Tips
-1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `create_pipeline` → `dryrun_pipeline` to verify
+1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `dryrun_pipeline` to verify → `create_pipeline`
 2. For dashboard creation: Prepare Perses JSON definition → `create_dashboard` → verify with `list_dashboards`
 3. For data analysis: `describe_table` first → understand schema → `execute_sql` or `execute_tql`
 4. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
-5. Always check `health_check` if queries fail unexpectedly
+5. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
+6. Always check `health_check` if queries fail unexpectedly
 ```
 
 ## Using Prompts in Claude Desktop
@@ -70,5 +74,5 @@ Help me create a GreptimeDB pipeline to parse this nginx log:
 Claude will:
 1. Analyze your log format
 2. Generate a pipeline YAML configuration
-3. Create the pipeline using `create_pipeline` tool
-4. Test it with `dryrun_pipeline` tool
+3. Test it with `dryrun_pipeline` tool
+4. Create the pipeline using `create_pipeline` tool

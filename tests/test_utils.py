@@ -3,6 +3,7 @@ import datetime
 import json
 from greptimedb_mcp_server.utils import (
     templates_loader,
+    render_prompt_template,
     security_gate,
     validate_table_name,
     is_sql_time_expression,
@@ -63,52 +64,92 @@ def test_templates_loader_basic():
 
 
 def test_template_variable_rendering():
-    """Test that template variables {{ key }} are correctly rendered."""
-    from typing import Annotated
-
+    """Test that template variables are correctly rendered."""
     templates = templates_loader()
 
-    # Test with pipeline_creator template which has variables
-    if "pipeline_creator" in templates:
-        template_data = templates["pipeline_creator"]
-        config = template_data["config"]
-        template_content = template_data["template"]
+    template = templates["pipeline_creator"]["template"]
+    result = render_prompt_template(
+        template,
+        {"log_sample": "test log line", "pipeline_name": "my_test_pipeline"},
+    )
 
-        args_config = config.get("arguments", [])
-        arg_info = [
-            (arg["name"], arg.get("description", ""), arg.get("required", False))
-            for arg in args_config
-            if isinstance(arg, dict) and "name" in arg
-        ]
+    assert "{{ log_sample }}" not in result, "log_sample variable was not replaced"
+    assert (
+        "{{ pipeline_name }}" not in result
+    ), "pipeline_name variable was not replaced"
+    assert "test log line" in result, "log_sample value not found in result"
+    assert "my_test_pipeline" in result, "pipeline_name value not found in result"
 
-        # Build the prompt function dynamically (same logic as server.py)
-        arg_params = ", ".join(
-            f"{arg_name}: Annotated[str, {repr(arg_desc)}]"
-            for arg_name, arg_desc, _ in arg_info
-        )
-        arg_tuples = ", ".join(f'("{n}", {n})' for n, _, _ in arg_info)
 
-        func_code = f"""
-def prompt_fn({arg_params}) -> str:
-    result = template_content
-    for key, value in [{arg_tuples}]:
-        result = result.replace(f"{{{{{{{{ {{key}} }}}}}}}}", str(value))
-    return result
-"""
-        namespace = {"template_content": template_content, "Annotated": Annotated}
-        exec(func_code, namespace)
-        prompt_fn = namespace["prompt_fn"]
+def test_template_supports_jinja_conditionals_and_defaults():
+    """Prompt templates support a restricted subset of Jinja."""
+    template = """{% if search_term %}
+Search: {{ search_term }}
+{% else %}
+Search: {{ search_term | default("error", true) }}
+{% endif %}"""
 
-        # Test rendering with sample values
-        result = prompt_fn(log_sample="test log line", pipeline_name="my_test_pipeline")
+    assert "Search: error" in render_prompt_template(template, {"search_term": ""})
+    assert "Search: timeout" in render_prompt_template(
+        template, {"search_term": "timeout"}
+    )
 
-        # Verify variables were replaced
-        assert "{{ log_sample }}" not in result, "log_sample variable was not replaced"
-        assert (
-            "{{ pipeline_name }}" not in result
-        ), "pipeline_name variable was not replaced"
-        assert "test log line" in result, "log_sample value not found in result"
-        assert "my_test_pipeline" in result, "pipeline_name value not found in result"
+
+def test_optional_prompt_arguments_default_to_empty_string():
+    """Prompt functions should allow optional arguments to be omitted."""
+    result = render_prompt_template(
+        templates_loader()["log_pipeline"]["template"],
+        {"table": "logs", "search_term": ""},
+    )
+
+    assert "{{ table }}" not in result
+    assert "{{ search_term }}" not in result
+    assert "Log Analysis: logs" in result
+
+
+def test_all_prompt_templates_render_with_configured_arguments():
+    """Every prompt template should render with the arguments declared in config."""
+    expected_prompts = {
+        "ingestion_troubleshooting",
+        "log_pipeline",
+        "metrics_analysis",
+        "observability_correlation",
+        "pipeline_creator",
+        "promql_analysis",
+        "query_performance_tuning",
+        "schema_design_advisor",
+        "table_operation",
+        "trace_analysis",
+    }
+    templates = templates_loader()
+
+    assert set(templates.keys()) == expected_prompts
+
+    for name, template_data in templates.items():
+        context = {}
+        for arg in template_data["config"].get("arguments", []):
+            if not isinstance(arg, dict) or "name" not in arg:
+                continue
+            context[arg["name"]] = (
+                f"sample_{arg['name']}" if arg.get("required") else ""
+            )
+
+        rendered = render_prompt_template(template_data["template"], context)
+
+        assert "{{" not in rendered, f"{name} left an unrendered expression"
+        assert "{%" not in rendered, f"{name} left an unrendered block"
+
+
+def test_template_undefined_variable_is_rejected():
+    """Misspelled prompt variables should not render silently."""
+    with pytest.raises(ValueError, match="missing_value"):
+        render_prompt_template("{{ missing_value }}", {})
+
+
+def test_template_sandbox_blocks_unsafe_attribute_access():
+    """Templates should not be able to access Python internals."""
+    with pytest.raises(ValueError):
+        render_prompt_template("{{ value.__class__.__mro__ }}", {"value": "x"})
 
 
 def test_empty_queries():

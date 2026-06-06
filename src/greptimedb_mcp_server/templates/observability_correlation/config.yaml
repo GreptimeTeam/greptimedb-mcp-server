@@ -1,0 +1,33 @@
+description: "Correlate GreptimeDB metrics, logs, and traces across a shared time window."
+version: "1.0"
+arguments:
+  - name: "service_name"
+    description: "Optional service name to focus the investigation."
+    required: false
+  - name: "trace_id"
+    description: "Optional trace ID to pivot from traces to logs or metrics."
+    required: false
+  - name: "trace_table"
+    description: "Optional trace table name. Defaults to opentelemetry_traces in examples."
+    required: false
+  - name: "log_table"
+    description: "Optional log table name. Log SQL examples are emitted only when this is provided."
+    required: false
+  - name: "metric_name"
+    description: "Optional Prometheus-style metric name for TQL examples."
+    required: false
+  - name: "start_time"
+    description: "Start time for the investigation, such as now() - interval '1' hour or an RFC3339 timestamp."
+    required: true
+  - name: "end_time"
+    description: "End time for the investigation, such as now() or an RFC3339 timestamp."
+    required: true
+metadata:
+  tags:
+    - observability
+    - correlation
+    - metrics
+    - logs
+    - traces
+  suggested_use: "Investigate incidents by moving between metrics, logs, and traces in GreptimeDB."
+  output_format: "markdown"

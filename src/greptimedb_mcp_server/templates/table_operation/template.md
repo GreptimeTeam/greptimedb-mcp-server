@@ -1,11 +1,11 @@
 # Table Diagnostics: {{ table }}
 
-Analyze table structure, region health, storage, and query performance.
+Analyze table structure, region health, storage metadata, and cluster state.
+For slow query analysis, use the `query_performance_tuning` prompt instead.
 
 ## Available Tools
 
 - `describe_table` - Get table schema
-- `explain_query` - Analyze query execution plan (set `analyze=true` for runtime stats)
 - `execute_sql` - Run diagnostic SQL queries
 
 ## Schema Analysis
@@ -20,6 +20,11 @@ SHOW CREATE TABLE {{ table }};
 -- Column details
 SELECT column_name, data_type, semantic_type, is_nullable
 FROM INFORMATION_SCHEMA.COLUMNS
+WHERE table_name = '{{ table }}';
+
+-- Table metadata, including table_id for joins with storage tables
+SELECT table_catalog, table_schema, table_name, table_id, engine
+FROM INFORMATION_SCHEMA.TABLES
 WHERE table_name = '{{ table }}';
 ```
 
@@ -37,8 +42,8 @@ FROM INFORMATION_SCHEMA.REGION_STATISTICS r
 JOIN INFORMATION_SCHEMA.TABLES t ON r.table_id = t.table_id
 WHERE t.table_name = '{{ table }}';
 
--- Find unhealthy regions (status should be ALIVE)
-SELECT region_id, peer_id, status, down_seconds
+-- Find unhealthy regions. Current statuses are usually ALIVE or DOWNGRADED.
+SELECT region_id, peer_id, status
 FROM INFORMATION_SCHEMA.REGION_PEERS
 WHERE table_name = '{{ table }}' AND status != 'ALIVE';
 ```
@@ -47,34 +52,17 @@ WHERE table_name = '{{ table }}' AND status != 'ALIVE';
 
 ```sql
 -- SST file details for the table
-SELECT s.file_id, s.file_size, s.num_rows, s.min_ts, s.max_ts, s.level
+SELECT s.file_id, s.file_size, s.num_rows, s.min_ts, s.max_ts, s.level, s.visible
 FROM INFORMATION_SCHEMA.SSTS_MANIFEST s
 JOIN INFORMATION_SCHEMA.TABLES t ON s.table_id = t.table_id
 WHERE t.table_name = '{{ table }}';
 
 -- Index information for the table
-SELECT i.index_file_path, i.index_type, i.index_file_size, i.target_json
+SELECT i.index_file_path, i.index_type, i.index_file_size, i.target_json, i.meta_json
 FROM INFORMATION_SCHEMA.SSTS_INDEX_META i
 JOIN INFORMATION_SCHEMA.TABLES t ON i.table_id = t.table_id
 WHERE t.table_name = '{{ table }}';
 ```
-
-## Query Optimization
-
-Use `explain_query` tool for query analysis:
-
-```
-# Basic execution plan
-explain_query(query="SELECT * FROM {{ table }} WHERE ts > now() - INTERVAL '1 hour'")
-
-# With runtime stats (actual execution)
-explain_query(query="SELECT * FROM {{ table }} LIMIT 100", analyze=true)
-```
-
-**What to look for:**
-- Full table scans vs index usage
-- Partition pruning effectiveness
-- Join strategies and row estimates
 
 ## Cluster Overview
 
@@ -85,7 +73,7 @@ FROM INFORMATION_SCHEMA.CLUSTER_INFO;
 
 -- Running queries
 SELECT id, query, start_timestamp, elapsed_time
-FROM INFORMATION_SCHEMA.PROCESSLIST;
+FROM INFORMATION_SCHEMA.PROCESS_LIST;
 ```
 
 ## References

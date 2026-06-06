@@ -1,0 +1,19 @@
+description: "Schema and index design advisor for GreptimeDB tables."
+version: "1.0"
+arguments:
+  - name: "workload"
+    description: "Workload type or data source, such as metrics, logs, traces, IoT, OTLP, Prometheus, or Loki."
+    required: true
+  - name: "sample_data"
+    description: "Optional sanitized sample rows, log lines, or metric labels."
+    required: false
+  - name: "query_patterns"
+    description: "Optional common query patterns, filters, and dashboard needs."
+    required: false
+metadata:
+  tags:
+    - schema
+    - table-design
+    - indexes
+  suggested_use: "Design GreptimeDB schemas, primary keys, indexes, append mode, and partitioning."
+  output_format: "markdown"

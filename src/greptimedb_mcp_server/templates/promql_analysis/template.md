@@ -4,7 +4,9 @@
 
 ## TQL EVAL Syntax
 
-Use `execute_tql` tool with PromQL expressions. Time parameters are passed separately.
+Use the `execute_tql` tool with a PromQL expression. Do not include the `TQL EVAL`
+wrapper in the `query` argument; the tool builds `TQL EVAL (start, end, step,
+[lookback])` from the separate parameters.
 
 ## Common Queries
 
@@ -38,9 +40,9 @@ avg by (service) ({{ metric }})
 
 ```promql
 -- 99th percentile latency
-histogram_quantile(0.99, rate({{ metric }}_bucket[5m]))
+histogram_quantile(0.99, sum by (le) (rate({{ metric }}_bucket[5m])))
 
--- Multiple percentiles
+-- 95th percentile by service
 histogram_quantile(0.95, sum by (le) (rate({{ metric }}_bucket[5m])))
 ```
 
@@ -51,15 +53,16 @@ histogram_quantile(0.95, sum by (le) (rate({{ metric }}_bucket[5m])))
 sum(rate(errors_total[5m])) / sum(rate(requests_total[5m])) > 0.01
 
 -- High latency detection
-histogram_quantile(0.99, rate({{ metric }}_bucket[5m])) > 0.5
+histogram_quantile(0.99, sum by (le) (rate({{ metric }}_bucket[5m]))) > 0.5
 ```
 
 ## Notes
 
 - Use `execute_tql` tool with: query, start, end, step (required), lookback (optional)
-- Time formats: SQL expression (now(), now() - interval '5' minute), RFC3339, or Unix timestamp
+- Time formats: SQL expression (`now()`, `now() - interval '5' minute`), RFC3339, or Unix timestamp
 - Label matchers: `=`, `!=`, `=~` (regex), `!~`
 - Time durations: s, m, h, d, w
+- TQL supports `AS alias` in raw SQL for single-field results, but this MCP tool currently exposes the PromQL expression form
 
 ## References
 

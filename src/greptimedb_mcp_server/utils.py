@@ -3,8 +3,18 @@ import logging
 import yaml
 import os
 from typing import Any
+from jinja2 import StrictUndefined, TemplateError
+from jinja2.sandbox import SandboxedEnvironment
 
 logger = logging.getLogger("greptimedb_mcp_server")
+
+_PROMPT_TEMPLATE_ENV = SandboxedEnvironment(
+    autoescape=False,
+    trim_blocks=True,
+    lstrip_blocks=True,
+    undefined=StrictUndefined,
+)
+_PROMPT_TEMPLATE_ENV.globals.clear()
 
 
 def security_gate(query: str) -> tuple[bool, str]:
@@ -71,21 +81,31 @@ def templates_loader() -> dict[str, dict[str, str]]:
     for category in os.listdir(template_dir):
         category_path = os.path.join(template_dir, category)
         if os.path.isdir(category_path):
+            config_path = os.path.join(category_path, "config.yaml")
+            template_path = os.path.join(category_path, "template.md")
+            if not os.path.exists(config_path) or not os.path.exists(template_path):
+                logger.warning("Skipping incomplete prompt template: %s", category)
+                continue
+
             # Load config
-            with open(
-                os.path.join(category_path, "config.yaml"), "r", encoding="utf-8"
-            ) as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             # Load template
-            with open(
-                os.path.join(category_path, "template.md"), "r", encoding="utf-8"
-            ) as f:
+            with open(template_path, "r", encoding="utf-8") as f:
                 template = f.read()
 
             templates[category] = {"config": config, "template": template}
 
     return templates
+
+
+def render_prompt_template(template: str, context: dict[str, Any]) -> str:
+    """Render a prompt template with a restricted Jinja environment."""
+    try:
+        return _PROMPT_TEMPLATE_ENV.from_string(template).render(**context)
+    except TemplateError as e:
+        raise ValueError(f"Failed to render prompt template: {e}") from e
 
 
 # Validation patterns
