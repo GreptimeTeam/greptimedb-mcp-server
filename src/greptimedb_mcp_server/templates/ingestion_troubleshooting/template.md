@@ -24,6 +24,9 @@ Symptom:
 SHOW TABLES;
 
 {% if table %}
+{% set _parts = table.split('.') %}
+{% set schema = _parts[0] if _parts | length > 1 else '' %}
+{% set tbl = _parts[1] if _parts | length > 1 else table %}
 DESCRIBE {{ table }};
 SHOW CREATE TABLE {{ table }};
 
@@ -33,7 +36,7 @@ SHOW CREATE TABLE {{ table }};
 -- Column semantic types.
 SELECT column_name, data_type, semantic_type, is_nullable
 FROM INFORMATION_SCHEMA.COLUMNS
-WHERE table_name = '{{ table }}';
+WHERE table_name = '{{ tbl }}'{% if schema %} AND table_schema = '{{ schema }}'{% endif %};
 {% else %}
 -- Find recently created or relevant tables.
 SELECT table_schema, table_name, table_id, engine

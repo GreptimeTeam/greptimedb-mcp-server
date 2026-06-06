@@ -2,8 +2,9 @@ import re
 import logging
 import yaml
 import os
+from functools import lru_cache
 from typing import Any
-from jinja2 import StrictUndefined, TemplateError
+from jinja2 import StrictUndefined, Template, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 logger = logging.getLogger("greptimedb_mcp_server")
@@ -74,7 +75,7 @@ def security_gate(query: str) -> tuple[bool, str]:
     return False, ""
 
 
-def templates_loader() -> dict[str, dict[str, str]]:
+def templates_loader() -> dict[str, dict[str, Any]]:
     templates = {}
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
 
@@ -100,10 +101,16 @@ def templates_loader() -> dict[str, dict[str, str]]:
     return templates
 
 
+@lru_cache(maxsize=128)
+def _compile_prompt_template(template: str) -> Template:
+    """Compile and cache a prompt template. Templates are static strings."""
+    return _PROMPT_TEMPLATE_ENV.from_string(template)
+
+
 def render_prompt_template(template: str, context: dict[str, Any]) -> str:
     """Render a prompt template with a restricted Jinja environment."""
     try:
-        return _PROMPT_TEMPLATE_ENV.from_string(template).render(**context)
+        return _compile_prompt_template(template).render(**context)
     except TemplateError as e:
         raise ValueError(f"Failed to render prompt template: {e}") from e
 
