@@ -18,6 +18,29 @@ class MockCursor:
             self._results = [("users",), ("orders",)]
         elif "SHOW DATABASES" in self.query.upper():
             self._results = [("public",), ("greptime_private",)]
+        elif "INFORMATION_SCHEMA.COLUMNS" in self.query.upper():
+            self._results = [
+                ("id", "Int64", "TAG", "NO"),
+                ("name", "String", "FIELD", "YES"),
+                ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
+            ]
+        elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
+            if args and args[1] == "users":
+                self._results = [
+                    (
+                        "greptime",
+                        args[0],
+                        args[1],
+                        1024,
+                        "metric",
+                        "opentelemetry",
+                        "",
+                        "declared",
+                        '{"metric.type":"counter","metric.unit":"By"}',
+                    )
+                ]
+            else:
+                self._results = []
         elif "DESCRIBE" in self.query.upper():
             self._results = [
                 ("id", "Int64", "", "PRI", "", ""),
@@ -46,6 +69,11 @@ class MockCursor:
         elif "GREPTIME_PRIVATE.PIPELINES" in self.query.upper():
             # Pipeline list query - returns empty by default
             self._results = []
+        elif "SELECT * FROM" in self.query.upper():
+            self._results = [
+                (1, "John", "2024-01-01 00:00:00"),
+                (2, "Jane", "2024-01-01 00:01:00"),
+            ]
         elif "SELECT" in self.query.upper():
             self._results = [(1, "John"), (2, "Jane")]
         else:
@@ -85,6 +113,25 @@ class MockCursor:
                 ("Default", None),
                 ("Semantic Type", None),
             ]
+        elif "INFORMATION_SCHEMA.COLUMNS" in self.query.upper():
+            return [
+                ("column_name", None),
+                ("data_type", None),
+                ("semantic_type", None),
+                ("is_nullable", None),
+            ]
+        elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
+            return [
+                ("table_catalog", None),
+                ("table_schema", None),
+                ("table_name", None),
+                ("table_id", None),
+                ("signal_type", None),
+                ("source", None),
+                ("pipeline", None),
+                ("metadata_quality", None),
+                ("semantic_options", None),
+            ]
         elif "VERSION()" in self.query.upper():
             return [("version()", None)]
         elif "TQL" in self.query.upper():
@@ -95,6 +142,8 @@ class MockCursor:
             return [("ts", None), ("host", None), ("avg_cpu", None)]
         elif "GREPTIME_PRIVATE.PIPELINES" in self.query.upper():
             return [("name", None), ("pipeline", None), ("version", None)]
+        elif "SELECT * FROM" in self.query.upper():
+            return [("id", None), ("name", None), ("ts", None)]
         elif "SELECT" in self.query.upper():
             return [("id", None), ("name", None)]
         return []

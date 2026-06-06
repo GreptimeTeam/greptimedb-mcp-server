@@ -7,14 +7,14 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 ## Available Tools
 
 - `execute_sql` - Execute SQL queries (MySQL syntax)
-- `describe_table` - Get table schema
+- `describe_table` - Inspect table profile: schema, semantics, and sample rows
 - `execute_tql` - Execute PromQL-compatible queries
 - `query_range` - Time-window aggregations with RANGE syntax
 
 ## Guidelines
 
 1. Always filter by time range for time-series queries
-2. Use `DESCRIBE table_name` to explore schema first
+2. Use `describe_table` first to inspect schema, semantic metadata, and sample rows
 3. Use aggregation functions: avg, max, min, sum, count, stddev
 4. Results are read-only; write operations are blocked
 
@@ -24,8 +24,8 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 -- List tables
 SHOW TABLES;
 
--- Get schema
-DESCRIBE your_table;
+-- Get table profile with schema, semantics, and sample rows
+-- Use describe_table(table="your_table")
 
 -- Recent data sample
 SELECT * FROM your_table
