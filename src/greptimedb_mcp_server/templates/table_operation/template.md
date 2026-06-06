@@ -4,18 +4,23 @@ Analyze table structure, region health, storage, and query performance.
 
 ## Available Tools
 
-- `describe_table` - Get table schema
+- `describe_table` - Inspect table profile: schema, semantic metadata, sample rows
 - `explain_query` - Analyze query execution plan (set `analyze=true` for runtime stats)
 - `execute_sql` - Run diagnostic SQL queries
 
 ## Schema Analysis
 
 ```sql
--- Table structure
-DESCRIBE {{ table }};
+-- Table profile
+-- Use describe_table(table="{{ table }}") for schema, semantics, and sample rows.
 
 -- Full DDL
 SHOW CREATE TABLE {{ table }};
+
+-- Table semantic metadata, if supported by this GreptimeDB version
+SELECT table_schema, table_name, signal_type, source, pipeline, metadata_quality, semantic_options
+FROM information_schema.table_semantics
+WHERE table_name = '{{ table }}';
 
 -- Column details
 SELECT column_name, data_type, semantic_type, is_nullable

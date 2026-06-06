@@ -43,7 +43,7 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 | `execute_sql` | Execute SQL queries with format (csv/json/markdown) and limit options |
 | `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
 | `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
-| `describe_table` | Get table schema including column names, types, and constraints |
+| `describe_table` | Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance |
 | `explain_query` | Analyze SQL or TQL query execution plans |
 | `health_check` | Check database connection status and server version |
 
