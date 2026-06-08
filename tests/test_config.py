@@ -1,5 +1,7 @@
 import os
 from unittest.mock import patch
+import pytest
+
 from greptimedb_mcp_server.config import Config, _parse_comma_separated
 
 
@@ -23,6 +25,7 @@ def test_config_default_values():
             assert config.transport == "stdio"
             assert config.listen_host == "0.0.0.0"
             assert config.listen_port == 8080
+            assert config.allow_write is False
             assert config.allowed_hosts == []
             assert config.allowed_origins == []
 
@@ -44,6 +47,7 @@ def test_config_env_variables():
         "GREPTIMEDB_TRANSPORT": "streamable-http",
         "GREPTIMEDB_LISTEN_HOST": "127.0.0.1",
         "GREPTIMEDB_LISTEN_PORT": "3000",
+        "GREPTIMEDB_ALLOW_WRITE": "true",
         "GREPTIMEDB_ALLOWED_HOSTS": "localhost:*,127.0.0.1:*",
         "GREPTIMEDB_ALLOWED_ORIGINS": "http://localhost:*,https://example.com",
     }
@@ -64,6 +68,7 @@ def test_config_env_variables():
             assert config.transport == "streamable-http"
             assert config.listen_host == "127.0.0.1"
             assert config.listen_port == 3000
+            assert config.allow_write is True
             assert config.allowed_hosts == ["localhost:*", "127.0.0.1:*"]
             assert config.allowed_origins == [
                 "http://localhost:*",
@@ -101,6 +106,8 @@ def test_config_cli_arguments():
         "192.168.1.1",
         "--listen-port",
         "9090",
+        "--allow-write",
+        "true",
         "--allowed-hosts",
         "my-service.namespace:*",
         "--allowed-origins",
@@ -123,6 +130,7 @@ def test_config_cli_arguments():
             assert config.transport == "sse"
             assert config.listen_host == "192.168.1.1"
             assert config.listen_port == 9090
+            assert config.allow_write is True
             assert config.allowed_hosts == ["my-service.namespace:*"]
             assert config.allowed_origins == ["http://my-app.example.com"]
 
@@ -144,6 +152,7 @@ def test_config_precedence():
         "GREPTIMEDB_TRANSPORT": "stdio",
         "GREPTIMEDB_LISTEN_HOST": "env-listen-host",
         "GREPTIMEDB_LISTEN_PORT": "1111",
+        "GREPTIMEDB_ALLOW_WRITE": "false",
     }
 
     cli_args = [
@@ -172,6 +181,8 @@ def test_config_precedence():
         "cli-listen-host",
         "--listen-port",
         "2222",
+        "--allow-write",
+        "true",
     ]
 
     with patch.dict(os.environ, env_vars):
@@ -190,6 +201,42 @@ def test_config_precedence():
             assert config.transport == "streamable-http"
             assert config.listen_host == "cli-listen-host"
             assert config.listen_port == 2222
+            assert config.allow_write is True
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_config_allow_write_boolean_values(env_value, expected):
+    with patch.dict(os.environ, {"GREPTIMEDB_ALLOW_WRITE": env_value}, clear=True):
+        with patch("sys.argv", ["script_name"]):
+            config = Config.from_env_arguments()
+
+            assert config.allow_write is expected
+
+
+def test_config_allow_write_rejects_invalid_env_value():
+    with patch.dict(os.environ, {"GREPTIMEDB_ALLOW_WRITE": "maybe"}, clear=True):
+        with patch("sys.argv", ["script_name"]):
+            with pytest.raises(SystemExit):
+                Config.from_env_arguments()
+
+
+def test_config_allow_write_rejects_invalid_cli_value():
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("sys.argv", ["script_name", "--allow-write", "maybe"]):
+            with pytest.raises(SystemExit):
+                Config.from_env_arguments()
 
 
 class TestParseCommaSeparated:

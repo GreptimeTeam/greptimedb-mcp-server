@@ -119,6 +119,11 @@
           "name": "GREPTIMEDB_AUDIT_ENABLED",
           "description": "Enable audit logging for tool invocations (default: true)",
           "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_ALLOW_WRITE",
+          "description": "Allow write/destructive SQL (DDL/DML) via execute_sql by skipping the security gate. DANGEROUS: only use on local or test instances (default: false)",
+          "isRequired": false
         }
       ]
     }

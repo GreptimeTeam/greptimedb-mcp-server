@@ -90,6 +90,7 @@ GREPTIMEDB_POOL_SIZE=5         # Connection pool size
 GREPTIMEDB_MASK_ENABLED=true   # Enable sensitive data masking
 GREPTIMEDB_MASK_PATTERNS=      # Additional patterns (comma-separated)
 GREPTIMEDB_AUDIT_ENABLED=true  # Enable audit logging
+GREPTIMEDB_ALLOW_WRITE=false   # Allow write/DDL via execute_sql (DANGEROUS, local/test only)
 
 # Transport (for HTTP server mode)
 GREPTIMEDB_TRANSPORT=stdio     # stdio, sse, or streamable-http
@@ -111,6 +112,7 @@ greptimedb-mcp-server \
   --timezone UTC \
   --pool-size 5 \
   --mask-enabled true \
+  --allow-write false \
   --transport stdio
 ```
 
@@ -164,6 +166,27 @@ All queries go through a security gate that:
 - **Blocks**: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE, EXEC, LOAD, COPY
 - **Blocks**: Encoded bypass attempts (hex, UNHEX, CHAR)
 - **Allows**: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION
+
+### Write Mode (Disabled by Default)
+
+The server is **read-only by default**. For local development or testing, you can
+allow write/destructive SQL (DDL/DML such as `CREATE`, `DROP`, `ALTER`, `INSERT`,
+`UPDATE`, `DELETE`) through the `execute_sql` tool by enabling write mode:
+
+```bash
+# Environment variable
+GREPTIMEDB_ALLOW_WRITE=true greptimedb-mcp-server
+
+# Or CLI argument
+greptimedb-mcp-server --allow-write true
+```
+
+When enabled, the security gate is **bypassed** for `execute_sql`, and the server
+logs a warning on startup.
+
+> ⚠️ **Danger**: This lets an AI assistant run destructive statements against your
+> database. Never enable it against production data. Combine with a read-only
+> database user if you only need read access.
 
 ### Data Masking
 
