@@ -65,9 +65,26 @@ ORDER BY table_name;
 
 ## Pipeline Dry Run Pattern
 
+Pass the pipeline definition inline so you can iterate without saving it first.
+
 ```python
 dryrun_pipeline(
-    pipeline_name="pipeline_name",
+    pipeline="""
+processors:
+  - date:
+      field: timestamp
+      formats:
+        - "%Y-%m-%dT%H:%M:%S%z"
+
+transform:
+  - fields:
+      - message
+    type: string
+  - fields:
+      - timestamp
+    type: time
+    index: timestamp
+""",
     data='{"timestamp":"2024-05-25T20:16:37Z","message":"example"}',
     data_type="application/x-ndjson"
 )
