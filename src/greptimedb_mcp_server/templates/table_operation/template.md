@@ -26,7 +26,7 @@ qualified name directly.
 SHOW CREATE TABLE {{ table }};
 
 -- Table semantic metadata, if supported by this GreptimeDB version
-SELECT table_schema, table_name, signal_type, source, pipeline, metadata_quality, semantic_options
+SELECT *
 FROM information_schema.table_semantics
 WHERE table_name = '{{ tbl }}'{% if schema %} AND table_schema = '{{ schema }}'{% endif %};
 
