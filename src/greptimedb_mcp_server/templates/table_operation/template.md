@@ -1,8 +1,8 @@
 # Table Diagnostics: {{ table }}
 
 {% set _parts = table.split('.') %}
-{% set schema = _parts[0] if _parts | length > 1 else '' %}
-{% set tbl = _parts[1] if _parts | length > 1 else table %}
+{% set tbl = _parts[-1] %}
+{% set schema = _parts[-2] if _parts | length > 1 else '' %}
 Analyze table structure, region health, storage metadata, and cluster state.
 For slow query analysis, use the `query_performance_tuning` prompt instead.
 

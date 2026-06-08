@@ -136,8 +136,8 @@ def _quote_identifier(name: str) -> str:
     return f"`{name.replace('`', '``')}`"
 
 
-def _quote_table_reference(table: str) -> str:
-    return ".".join(_quote_identifier(part) for part in table.split("."))
+def _quote_schema_table(table_schema: str, table_name: str) -> str:
+    return f"{_quote_identifier(table_schema)}.{_quote_identifier(table_name)}"
 
 
 def _normalize_nullable(value) -> bool | None:
@@ -256,14 +256,18 @@ def _fetch_table_semantics(cursor, table_schema: str, table_name: str) -> dict:
 
 
 def _fetch_table_samples(
-    cursor, state, table: str, schema: dict, sample_limit: int
+    cursor, state, table_schema: str, table_name: str, schema: dict, sample_limit: int
 ) -> dict:
-    """Read a small sample, preferring the newest rows when a time index exists."""
+    """Read a small sample, preferring the newest rows when a time index exists.
+
+    The sample query targets the resolved schema.table, ignoring any catalog
+    segment, to stay consistent with how schema/semantics are resolved.
+    """
     if sample_limit == 0:
         return {"included": True, "limit": 0, "columns": [], "rows": []}
 
     try:
-        quoted_table = _quote_table_reference(table)
+        quoted_table = _quote_schema_table(table_schema, table_name)
         time_index = schema.get("time_index")
         if time_index:
             strategy = "latest_by_time_index"
@@ -592,7 +596,9 @@ async def describe_table(
                     else {"included": False}
                 )
                 samples = (
-                    _fetch_table_samples(cursor, state, table, schema, sample_limit)
+                    _fetch_table_samples(
+                        cursor, state, table_schema, table_name, schema, sample_limit
+                    )
                     if include_samples
                     else {"included": False}
                 )
@@ -611,7 +617,17 @@ async def describe_table(
         return await asyncio.to_thread(_sync_describe)
     except Error as e:
         logger.error(f"Error describing table '{table}': {e}")
-        return f"Error: {str(e)}"
+        return json.dumps(
+            {
+                "table": table,
+                "table_schema": table_schema,
+                "table_name": table_name,
+                "error": f"Error describing table: {str(e)}",
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
 
 
 @mcp.tool()

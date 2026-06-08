@@ -712,6 +712,102 @@ async def test_describe_table_catalog_qualified():
 
 
 @pytest.mark.asyncio
+async def test_describe_table_catalog_qualified_sample_ignores_catalog():
+    """The sample query targets schema.table only, never the catalog segment."""
+    executed = []
+
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+            self._results = []
+
+        def execute(self, query, args=None):
+            self.query = query
+            executed.append(query)
+            if "information_schema.columns" in query:
+                self._results = [
+                    ("id", "Int64", "TAG", "NO"),
+                    ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
+                ]
+            elif "information_schema.table_semantics" in query:
+                self._results = []
+            elif "SELECT * FROM" in query:
+                self._results = [(1, "2024-01-01 00:00:00")]
+
+        def fetchall(self):
+            return self._results
+
+        def fetchone(self):
+            return None
+
+        @property
+        def description(self):
+            if "SELECT * FROM" in self.query:
+                return [("id", None), ("ts", None)]
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await describe_table(table="greptime.public.users")
+    data = json.loads(result)
+
+    sample_query = next(q for q in executed if "SELECT * FROM" in q)
+    assert "`public`.`users`" in sample_query
+    assert "greptime" not in sample_query
+    assert data["samples"]["strategy"] == "latest_by_time_index"
+
+
+@pytest.mark.asyncio
+async def test_describe_table_error_returns_json():
+    """On a database Error, describe_table returns a JSON object, not a bare string."""
+
+    class Cursor:
+        def execute(self, query, args=None):
+            raise server.Error("boom")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await describe_table(table="public.users")
+    data = json.loads(result)
+    assert data["table"] == "public.users"
+    assert "Error describing table" in data["error"]
+
+
+@pytest.mark.asyncio
 async def test_describe_table_sample_limit_clamped():
     """Test describe_table clamps sample limit."""
     result = await describe_table(table="users", sample_limit=100)
