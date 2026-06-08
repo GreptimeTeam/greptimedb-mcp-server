@@ -435,7 +435,8 @@ async def lifespan(mcp: FastMCP):
         http_session=aiohttp.ClientSession(),
     )
 
-    logger.info(f"GreptimeDB Config: {db_config}")
+    safe_db_config = {**db_config, "password": "***" if config.password else ""}
+    logger.info(f"GreptimeDB Config: {safe_db_config}")
     logger.info(f"Data masking: {'enabled' if config.mask_enabled else 'disabled'}")
     if config.allow_write:
         logger.warning(
