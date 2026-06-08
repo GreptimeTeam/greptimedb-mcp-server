@@ -44,6 +44,7 @@ def setup_state():
         listen_host="0.0.0.0",
         listen_port=8080,
         audit_enabled=False,
+        allow_write=False,
         allowed_hosts=[],
         allowed_origins=[],
     )
@@ -71,6 +72,7 @@ def setup_state():
         http_base_url=f"http://{config.host}:{config.http_port}",
         mask_enabled=config.mask_enabled,
         mask_patterns=[],
+        allow_write=config.allow_write,
         http_session=None,
     )
 
@@ -96,6 +98,19 @@ async def test_execute_sql_dangerous_blocked():
 
     assert "Error: Dangerous operation blocked" in result
     assert "Forbidden `DROP` operation" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_write_allowed_when_enabled():
+    """Write mode lets destructive SQL bypass the security gate."""
+    server._state.allow_write = True
+    try:
+        result = await execute_sql(query="DROP TABLE users")
+    finally:
+        server._state.allow_write = False
+
+    assert "Dangerous operation blocked" not in result
+    assert "executed successfully" in result
 
 
 @pytest.mark.asyncio

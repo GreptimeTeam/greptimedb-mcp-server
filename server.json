@@ -6,12 +6,12 @@
     "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
     "source": "github"
   },
-  "version": "0.4.9",
+  "version": "0.5.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "greptimedb-mcp-server",
-      "version": "0.4.9",
+      "version": "0.5.0",
       "transport": {
         "type": "stdio"
       },
@@ -118,6 +118,11 @@
         {
           "name": "GREPTIMEDB_AUDIT_ENABLED",
           "description": "Enable audit logging for tool invocations (default: true)",
+          "isRequired": false
+        },
+        {
+          "name": "GREPTIMEDB_ALLOW_WRITE",
+          "description": "Allow write/destructive SQL (DDL/DML) via execute_sql by skipping the security gate. DANGEROUS: only use on local or test instances (default: false)",
           "isRequired": false
         }
       ]

@@ -84,6 +84,13 @@ class Config:
     Enable audit logging for all tool calls
     """
 
+    allow_write: bool
+    """
+    Allow write/destructive SQL (DDL/DML such as CREATE, DROP, ALTER, INSERT,
+    UPDATE, DELETE) through the `execute_sql` tool by skipping the security
+    gate. Disabled by default; intended only for local development or testing.
+    """
+
     allowed_hosts: list[str]
     """
     Allowed hosts for DNS rebinding protection (for sse/streamable-http).
@@ -169,7 +176,7 @@ class Config:
 
         parser.add_argument(
             "--mask-enabled",
-            type=lambda x: x.lower() not in ("false", "0", "no"),
+            type=_parse_bool,
             help="Enable data masking for sensitive columns (default: true)",
             default=os.getenv("GREPTIMEDB_MASK_ENABLED", "true"),
         )
@@ -205,9 +212,20 @@ class Config:
 
         parser.add_argument(
             "--audit-enabled",
-            type=lambda x: x.lower() not in ("false", "0", "no"),
+            type=_parse_bool,
             help="Enable audit logging for all tool calls (default: true)",
             default=os.getenv("GREPTIMEDB_AUDIT_ENABLED", "true"),
+        )
+
+        parser.add_argument(
+            "--allow-write",
+            type=_parse_bool,
+            help=(
+                "Allow write/destructive SQL (DDL/DML) via execute_sql by "
+                "skipping the security gate. DANGEROUS: only use on local or "
+                "test instances (default: false)"
+            ),
+            default=os.getenv("GREPTIMEDB_ALLOW_WRITE", "false"),
         )
 
         parser.add_argument(
@@ -250,6 +268,7 @@ class Config:
             listen_host=args.listen_host,
             listen_port=args.listen_port,
             audit_enabled=args.audit_enabled,
+            allow_write=args.allow_write,
             allowed_hosts=_parse_comma_separated(args.allowed_hosts),
             allowed_origins=_parse_comma_separated(args.allowed_origins),
         )
@@ -261,3 +280,15 @@ def _parse_comma_separated(value: str) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a strict boolean value for environment and CLI configuration."""
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(
+        "expected a boolean value: true/false, 1/0, yes/no, or on/off"
+    )

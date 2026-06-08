@@ -63,6 +63,7 @@ class AppState:
     http_base_url: str
     mask_enabled: bool = True
     mask_patterns: list[str] = field(default_factory=list)
+    allow_write: bool = False
     pool: MySQLConnectionPool | None = field(default=None)
     http_session: aiohttp.ClientSession | None = field(default=None)
 
@@ -430,11 +431,18 @@ async def lifespan(mcp: FastMCP):
         http_base_url=http_base_url,
         mask_enabled=config.mask_enabled,
         mask_patterns=mask_patterns,
+        allow_write=config.allow_write,
         http_session=aiohttp.ClientSession(),
     )
 
-    logger.info(f"GreptimeDB Config: {db_config}")
+    safe_db_config = {**db_config, "password": "***" if config.password else ""}
+    logger.info(f"GreptimeDB Config: {safe_db_config}")
     logger.info(f"Data masking: {'enabled' if config.mask_enabled else 'disabled'}")
+    if config.allow_write:
+        logger.warning(
+            "Write mode ENABLED: execute_sql allows destructive SQL (DDL/DML). "
+            "Do NOT use against production data."
+        )
     logger.info("Starting GreptimeDB MCP server...")
 
     try:
@@ -549,13 +557,19 @@ async def execute_sql(
     ] = "csv",
     limit: Annotated[int, "Maximum number of rows to return (default: 1000)"] = 1000,
 ) -> str:
-    """Execute SQL query against GreptimeDB. Please use MySQL dialect."""
+    """Execute SQL query against GreptimeDB. Please use MySQL dialect.
+
+    Read-only by default. When the server runs with write mode enabled
+    (--allow-write / GREPTIMEDB_ALLOW_WRITE), destructive SQL (DDL/DML) is
+    also permitted.
+    """
     state = get_state()
     limit = _validate_sql_params(query, format, limit)
 
-    is_dangerous, reason = security_gate(query=query)
-    if is_dangerous:
-        return f"Error: Dangerous operation blocked: {reason}"
+    if not state.allow_write:
+        is_dangerous, reason = security_gate(query=query)
+        if is_dangerous:
+            return f"Error: Dangerous operation blocked: {reason}"
 
     start_time = time.time()
 
