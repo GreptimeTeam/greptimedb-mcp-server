@@ -20,10 +20,15 @@ class MockCursor:
             self._results = [("public",), ("greptime_private",)]
         elif "INFORMATION_SCHEMA.COLUMNS" in self.query.upper():
             self._results = [
-                ("id", "Int64", "TAG", "NO"),
-                ("name", "String", "FIELD", "YES"),
-                ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
+                ("id", "Int64", "TAG", "NO", None),
+                ("name", "String", "FIELD", "YES", "user name"),
+                ("ts", "TimestampMillisecond", "TIMESTAMP", "NO", None),
             ]
+        elif "INFORMATION_SCHEMA.TABLES" in self.query.upper():
+            if args and args[1] == "users":
+                self._results = [("user activity table",)]
+            else:
+                self._results = []
         elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
             if args and args[1] == "users":
                 self._results = [
@@ -119,7 +124,10 @@ class MockCursor:
                 ("data_type", None),
                 ("semantic_type", None),
                 ("is_nullable", None),
+                ("column_comment", None),
             ]
+        elif "INFORMATION_SCHEMA.TABLES" in self.query.upper():
+            return [("table_comment", None)]
         elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
             return [
                 ("table_catalog", None),

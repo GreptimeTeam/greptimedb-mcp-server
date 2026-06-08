@@ -151,11 +151,19 @@ def _normalize_nullable(value) -> bool | None:
     return None
 
 
+def _clean_comment(value) -> str | None:
+    """Normalize a comment to a non-empty trimmed string, or None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _fetch_table_schema(cursor, table_schema: str, table_name: str) -> dict:
     """Read column-level schema, deriving the time index and primary keys."""
     cursor.execute(
         """
-        SELECT column_name, data_type, semantic_type, is_nullable
+        SELECT column_name, data_type, semantic_type, is_nullable, column_comment
         FROM information_schema.columns
         WHERE table_schema = %s AND table_name = %s
         ORDER BY ordinal_position
@@ -168,24 +176,43 @@ def _fetch_table_schema(cursor, table_schema: str, table_name: str) -> dict:
     primary_keys = []
     for row in rows:
         column_name, data_type, semantic_type, is_nullable = row[:4]
+        column_comment = row[4] if len(row) > 4 else None
         semantic_type_text = str(semantic_type).upper() if semantic_type else ""
         if semantic_type_text == "TIMESTAMP":
             time_index = column_name
         elif semantic_type_text in {"TAG", "PRIMARY KEY", "PRIMARY_KEY"}:
             primary_keys.append(column_name)
-        columns.append(
-            {
-                "name": column_name,
-                "data_type": data_type,
-                "semantic_type": semantic_type,
-                "nullable": _normalize_nullable(is_nullable),
-            }
-        )
+        column = {
+            "name": column_name,
+            "data_type": data_type,
+            "semantic_type": semantic_type,
+            "nullable": _normalize_nullable(is_nullable),
+        }
+        comment = _clean_comment(column_comment)
+        if comment:
+            column["comment"] = comment
+        columns.append(column)
     return {
         "columns": columns,
         "time_index": time_index,
         "primary_keys": primary_keys,
     }
+
+
+def _fetch_table_comment(cursor, table_schema: str, table_name: str) -> str | None:
+    """Read the table-level comment, returning None when absent or empty."""
+    cursor.execute(
+        """
+        SELECT table_comment
+        FROM information_schema.tables
+        WHERE table_schema = %s AND table_name = %s
+        """,
+        (table_schema, table_name),
+    )
+    rows = cursor.fetchall()
+    if rows:
+        return _clean_comment(rows[0][0])
+    return None
 
 
 def _fetch_table_semantics(cursor, table_schema: str, table_name: str) -> dict:
@@ -590,6 +617,7 @@ async def describe_table(
                         indent=2,
                         default=str,
                     )
+                table_comment = _fetch_table_comment(cursor, table_schema, table_name)
                 semantics = (
                     _fetch_table_semantics(cursor, table_schema, table_name)
                     if include_semantics
@@ -606,6 +634,7 @@ async def describe_table(
                     "table": table,
                     "table_schema": table_schema,
                     "table_name": table_name,
+                    **({"table_comment": table_comment} if table_comment else {}),
                     "schema": schema,
                     "semantics": semantics,
                     "samples": samples,

@@ -179,9 +179,13 @@ async def test_describe_table():
 
     assert data["table"] == "users"
     assert data["table_schema"] == "testdb"
+    assert data["table_comment"] == "user activity table"
     assert data["schema"]["time_index"] == "ts"
     assert data["schema"]["primary_keys"] == ["id"]
     assert data["schema"]["columns"][0]["name"] == "id"
+    assert "comment" not in data["schema"]["columns"][0]
+    name_col = next(c for c in data["schema"]["columns"] if c["name"] == "name")
+    assert name_col["comment"] == "user name"
     assert data["semantics"]["available"] is True
     assert data["semantics"]["found"] is True
     assert data["semantics"]["signal_type"] == "metric"
@@ -237,7 +241,9 @@ async def test_describe_table_semantics_unavailable():
             self.query = query
             if "information_schema.table_semantics" in query:
                 raise server.Error("table not found")
-            if "information_schema.columns" in query:
+            if "information_schema.tables" in query:
+                self._results = []
+            elif "information_schema.columns" in query:
                 self._results = [
                     ("id", "Int64", "TAG", "NO"),
                     ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
@@ -310,6 +316,8 @@ async def test_describe_table_non_object_semantic_options():
                         "[1, 2, 3]",
                     )
                 ]
+            elif "information_schema.tables" in query:
+                self._results = []
             elif "information_schema.columns" in query:
                 self._results = [
                     ("id", "Int64", "TAG", "NO"),
@@ -730,6 +738,8 @@ async def test_describe_table_catalog_qualified_sample_ignores_catalog():
                     ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
                 ]
             elif "information_schema.table_semantics" in query:
+                self._results = []
+            elif "information_schema.tables" in query:
                 self._results = []
             elif "SELECT * FROM" in query:
                 self._results = [(1, "2024-01-01 00:00:00")]
