@@ -11,7 +11,7 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 - `execute_sql`: Run SQL queries (SELECT, SHOW, DESCRIBE only - read-only access)
 - `execute_tql`: Run PromQL-compatible time-series queries
 - `query_range`: Time-window aggregation with RANGE/ALIGN syntax
-- `describe_table`: Get table schema information
+- `describe_table`: Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance
 - `health_check`: Check database connection status
 - `explain_query`: Analyze query execution plans
 
@@ -44,7 +44,7 @@ Use these prompts for specialized tasks:
 ## Workflow Tips
 1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `dryrun_pipeline` to verify → `create_pipeline`
 2. For dashboard creation: Prepare Perses JSON definition → `create_dashboard` → verify with `list_dashboards`
-3. For data analysis: `describe_table` first → understand schema → `execute_sql` or `execute_tql`
+3. For data analysis: `describe_table` first → understand schema, semantics, and sample rows → `execute_sql` or `execute_tql`
 4. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
 5. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
 6. Always check `health_check` if queries fail unexpectedly

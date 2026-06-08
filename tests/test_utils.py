@@ -222,6 +222,21 @@ def test_format_results_json():
     assert data[0]["b"] == 2
 
 
+def test_format_results_json_non_native_values():
+    """Test JSON format handles non-JSON-native values without crashing."""
+    from decimal import Decimal
+
+    result = format_results(
+        ["amount", "payload"],
+        [(Decimal("3.14"), b"\x00\x01")],
+        "json",
+        mask_enabled=False,
+    )
+    data = json.loads(result)
+    assert data[0]["amount"] == "3.14"
+    assert data[0]["payload"] == "b'\\x00\\x01'"
+
+
 def test_format_results_markdown():
     """Test format_results with markdown format"""
     result = format_results(["a", "b"], [(1, 2)], "markdown")
@@ -448,6 +463,12 @@ def test_validate_table_name_schema_qualified():
     assert validate_table_name("my_schema.my_table") == "my_schema.my_table"
 
 
+def test_validate_table_name_catalog_qualified():
+    """Test validate_table_name accepts GreptimeDB-style catalog.schema.table"""
+    assert validate_table_name("greptime.public.users") == "greptime.public.users"
+    assert validate_table_name("cat.schema_name.tbl") == "cat.schema_name.tbl"
+
+
 def test_validate_table_name_invalid():
     """Test validate_table_name rejects invalid names"""
     with pytest.raises(ValueError) as excinfo:
@@ -459,7 +480,7 @@ def test_validate_table_name_invalid():
     assert "Invalid table name" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
-        validate_table_name("schema.table.extra")
+        validate_table_name("catalog.schema.table.extra")
     assert "Invalid table name" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:

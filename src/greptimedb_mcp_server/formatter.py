@@ -33,7 +33,9 @@ def _format_json(columns: list, rows: list) -> str:
     for row in rows:
         row_dict = {col: _convert_value(row[i]) for i, col in enumerate(columns)}
         result.append(row_dict)
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    # default=str keeps non-JSON-native values (Decimal, bytes, UUID) from
+    # raising TypeError; they fall back to their string form.
+    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
 def _format_markdown(columns: list, rows: list) -> str:

@@ -44,6 +44,7 @@ from mysql.connector.pooling import MySQLConnectionPool
 RES_PREFIX = "greptime://"
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
+MAX_SAMPLE_LIMIT = 20
 
 # Configure logging
 logging.basicConfig(
@@ -114,6 +115,282 @@ def get_state() -> AppState:
     if _state is None:
         raise RuntimeError("Application state not initialized")
     return _state
+
+
+def _split_table_reference(table: str, default_schema: str) -> tuple[str, str]:
+    """Split a possibly-qualified table reference into (schema, table).
+
+    Mirrors GreptimeDB's table_idents_to_full_name: the table name is always the
+    last segment, the schema the second-to-last. A leading catalog segment
+    (catalog.schema.table) is accepted for compatibility but ignored, since
+    information_schema is scoped to the connected catalog. Input is restricted to
+    at most three unquoted segments by validate_table_name.
+    """
+    parts = table.split(".")
+    if len(parts) == 1:
+        return default_schema, parts[0]
+    return parts[-2], parts[-1]
+
+
+def _quote_identifier(name: str) -> str:
+    return f"`{name.replace('`', '``')}`"
+
+
+def _quote_schema_table(table_schema: str, table_name: str) -> str:
+    return f"{_quote_identifier(table_schema)}.{_quote_identifier(table_name)}"
+
+
+def _normalize_nullable(value) -> bool | None:
+    if value is None:
+        return None
+    text = str(value).upper()
+    if text in {"YES", "Y", "TRUE", "1"}:
+        return True
+    if text in {"NO", "N", "FALSE", "0"}:
+        return False
+    return None
+
+
+def _clean_comment(value) -> str | None:
+    """Normalize a comment to a non-empty trimmed string, or None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _fetch_table_schema(cursor, table_schema: str, table_name: str) -> dict:
+    """Read column-level schema, deriving the time index and primary keys."""
+    cursor.execute(
+        """
+        SELECT column_name, data_type, semantic_type, is_nullable, column_comment
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s
+        ORDER BY ordinal_position
+        """,
+        (table_schema, table_name),
+    )
+    rows = cursor.fetchall()
+    columns = []
+    time_index = None
+    primary_keys = []
+    for row in rows:
+        column_name, data_type, semantic_type, is_nullable = row[:4]
+        column_comment = row[4] if len(row) > 4 else None
+        semantic_type_text = str(semantic_type).upper() if semantic_type else ""
+        if semantic_type_text == "TIMESTAMP":
+            time_index = column_name
+        elif semantic_type_text in {"TAG", "PRIMARY KEY", "PRIMARY_KEY"}:
+            primary_keys.append(column_name)
+        column = {
+            "name": column_name,
+            "data_type": data_type,
+            "semantic_type": semantic_type,
+            "nullable": _normalize_nullable(is_nullable),
+        }
+        comment = _clean_comment(column_comment)
+        if comment:
+            column["comment"] = comment
+        columns.append(column)
+    return {
+        "columns": columns,
+        "time_index": time_index,
+        "primary_keys": primary_keys,
+    }
+
+
+def _fetch_table_comment(cursor, table_schema: str, table_name: str) -> str | None:
+    """Read the table-level comment, returning None when absent or empty."""
+    cursor.execute(
+        """
+        SELECT table_comment
+        FROM information_schema.tables
+        WHERE table_schema = %s AND table_name = %s
+        """,
+        (table_schema, table_name),
+    )
+    rows = cursor.fetchall()
+    if rows:
+        return _clean_comment(rows[0][0])
+    return None
+
+
+def _fetch_table_semantics(cursor, table_schema: str, table_name: str) -> dict:
+    """Read the experimental table_semantics view, degrading if it is absent."""
+    try:
+        cursor.execute(
+            """
+            SELECT table_catalog, table_schema, table_name, table_id,
+                   signal_type, source, pipeline, metadata_quality,
+                   semantic_options
+            FROM information_schema.table_semantics
+            WHERE table_schema = %s AND table_name = %s
+            """,
+            (table_schema, table_name),
+        )
+        # fetchall() drains the unbuffered cursor before the next query runs;
+        # the WHERE clause matches at most one row.
+        rows = cursor.fetchall()
+        row = rows[0] if rows else None
+    except Error as e:
+        return {
+            "included": True,
+            "available": False,
+            "found": False,
+            "error": str(e),
+        }
+
+    if not row:
+        return {"included": True, "available": True, "found": False}
+
+    semantic_options = row[8]
+    options = {}
+    raw_options = None
+    parse_error = None
+    if semantic_options:
+        try:
+            parsed = json.loads(semantic_options)
+        except (TypeError, json.JSONDecodeError) as e:
+            raw_options = semantic_options
+            parse_error = str(e)
+        else:
+            # Guidance treats options as a key/value map; a non-object payload
+            # would crash _build_table_guidance, so keep it as raw instead.
+            if isinstance(parsed, dict):
+                options = parsed
+            else:
+                raw_options = semantic_options
+                parse_error = "semantic_options is not a JSON object"
+
+    result = {
+        "included": True,
+        "available": True,
+        "found": True,
+        "table_catalog": row[0],
+        "table_schema": row[1],
+        "table_name": row[2],
+        "table_id": row[3],
+        "signal_type": row[4],
+        "source": row[5],
+        "pipeline": row[6],
+        "metadata_quality": row[7],
+        "options": options,
+    }
+    if raw_options is not None:
+        result["raw_options"] = raw_options
+        result["options_parse_error"] = parse_error
+    return result
+
+
+def _fetch_table_samples(
+    cursor, state, table_schema: str, table_name: str, schema: dict, sample_limit: int
+) -> dict:
+    """Read a small sample, preferring the newest rows when a time index exists.
+
+    The sample query targets the resolved schema.table, ignoring any catalog
+    segment, to stay consistent with how schema/semantics are resolved.
+    """
+    if sample_limit == 0:
+        return {"included": True, "limit": 0, "columns": [], "rows": []}
+
+    try:
+        quoted_table = _quote_schema_table(table_schema, table_name)
+        time_index = schema.get("time_index")
+        if time_index:
+            strategy = "latest_by_time_index"
+            query = (
+                f"SELECT * FROM {quoted_table} "
+                f"ORDER BY {_quote_identifier(time_index)} DESC LIMIT %s"
+            )
+        else:
+            strategy = "plain_limit"
+            query = f"SELECT * FROM {quoted_table} LIMIT %s"
+
+        cursor.execute(query, (sample_limit,))
+        columns = [desc[0] for desc in cursor.description]
+        rows = cursor.fetchall()
+        formatted = format_results(
+            columns,
+            rows,
+            "json",
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
+        return {
+            "included": True,
+            "strategy": strategy,
+            "limit": sample_limit,
+            "columns": columns,
+            "rows": json.loads(formatted),
+        }
+    except Exception as e:
+        # Best-effort sample: a failed read (missing table, unsupported value
+        # type) must not sink the rest of the profile.
+        return {
+            "included": True,
+            "limit": sample_limit,
+            "columns": [],
+            "rows": [],
+            "error": str(e),
+        }
+
+
+def _build_table_guidance(schema: dict, semantics: dict, samples: dict) -> list[str]:
+    """Derive query hints from signal type, metric kind, and sample ordering."""
+    guidance = []
+    if semantics.get("included") and not semantics.get("available", True):
+        guidance.append(
+            "Table semantic metadata is unavailable. The connected GreptimeDB "
+            "version may not support information_schema.table_semantics."
+        )
+    elif semantics.get("included") and not semantics.get("found"):
+        guidance.append(
+            "No table semantic metadata was found. Treat signal type and "
+            "query pattern as schema/sample-based inference."
+        )
+
+    signal_type = semantics.get("signal_type")
+    options = semantics.get("options") or {}
+    metric_type = options.get("metric.type")
+    metadata_quality = semantics.get("metadata_quality")
+
+    if signal_type == "metric":
+        if metric_type == "counter":
+            guidance.append(
+                "This table is a counter metric. Prefer rate or increase "
+                "queries for trend analysis."
+            )
+        elif metric_type == "gauge":
+            guidance.append(
+                "This table is a gauge metric. Prefer absolute value, avg, "
+                "min, max, or percentile analysis."
+            )
+        elif metric_type == "histogram":
+            guidance.append(
+                "This table is a histogram metric. Prefer bucket/count/sum "
+                "based percentile analysis."
+            )
+        if metadata_quality == "inferred":
+            guidance.append(
+                "Metric type was inferred from naming. Re-check the query "
+                "choice if the metric name is non-standard."
+            )
+    elif signal_type == "trace":
+        guidance.append(
+            "This table represents traces. Prefer latency, error span, and "
+            "service-level aggregation queries."
+        )
+    elif signal_type == "log":
+        guidance.append(
+            "This table represents logs. Prefer full-text search plus "
+            "severity, time, and service aggregations."
+        )
+
+    if samples.get("included") and samples.get("strategy") == "latest_by_time_index":
+        guidance.append(
+            f"Sample rows are ordered by time index {schema.get('time_index')} descending."
+        )
+    return guidance
 
 
 @asynccontextmanager
@@ -294,31 +571,92 @@ async def execute_sql(
 
 @mcp.tool()
 async def describe_table(
-    table: Annotated[str, "Table name to describe (supports schema.table format)"],
+    table: Annotated[
+        str,
+        "Table name to describe (supports table, schema.table, or "
+        "catalog.schema.table format)",
+    ],
+    include_semantics: Annotated[
+        bool,
+        "Include table semantic metadata from information_schema.table_semantics",
+    ] = True,
+    include_samples: Annotated[
+        bool,
+        "Include a small sample of table rows for context",
+    ] = True,
+    sample_limit: Annotated[
+        int,
+        f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)",
+    ] = 5,
 ) -> str:
-    """Get table schema information including column names, types, and constraints."""
+    """Get a table profile: schema, semantic metadata, sample rows, and guidance."""
     state = get_state()
     table = validate_table_name(table)
+    sample_limit = max(0, min(sample_limit, MAX_SAMPLE_LIMIT))
+    table_schema, table_name = _split_table_reference(
+        table, state.db_config["database"]
+    )
 
     def _sync_describe():
         with state.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(f"DESCRIBE {table}")
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                return format_results(
-                    columns,
-                    rows,
-                    "markdown",
-                    mask_enabled=state.mask_enabled,
-                    mask_patterns=state.mask_patterns,
+                schema = _fetch_table_schema(cursor, table_schema, table_name)
+                if not schema["columns"]:
+                    return json.dumps(
+                        {
+                            "table": table,
+                            "table_schema": table_schema,
+                            "table_name": table_name,
+                            "schema": schema,
+                            "error": (
+                                f"Table '{table}' not found or has no visible "
+                                "columns."
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        default=str,
+                    )
+                table_comment = _fetch_table_comment(cursor, table_schema, table_name)
+                semantics = (
+                    _fetch_table_semantics(cursor, table_schema, table_name)
+                    if include_semantics
+                    else {"included": False}
                 )
+                samples = (
+                    _fetch_table_samples(
+                        cursor, state, table_schema, table_name, schema, sample_limit
+                    )
+                    if include_samples
+                    else {"included": False}
+                )
+                result = {
+                    "table": table,
+                    "table_schema": table_schema,
+                    "table_name": table_name,
+                    **({"table_comment": table_comment} if table_comment else {}),
+                    "schema": schema,
+                    "semantics": semantics,
+                    "samples": samples,
+                    "guidance": _build_table_guidance(schema, semantics, samples),
+                }
+                return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
     try:
         return await asyncio.to_thread(_sync_describe)
     except Error as e:
         logger.error(f"Error describing table '{table}': {e}")
-        return f"Error: {str(e)}"
+        return json.dumps(
+            {
+                "table": table,
+                "table_schema": table_schema,
+                "table_name": table_name,
+                "error": f"Error describing table: {str(e)}",
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
 
 
 @mcp.tool()
