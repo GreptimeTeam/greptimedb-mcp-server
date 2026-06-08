@@ -286,6 +286,79 @@ async def test_describe_table_semantics_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_describe_table_non_object_semantic_options():
+    """Test describe_table tolerates semantic_options that is valid JSON but not an object."""
+
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+            self._results = []
+
+        def execute(self, query, args=None):
+            self.query = query
+            if "information_schema.table_semantics" in query:
+                self._results = [
+                    (
+                        "greptime",
+                        "testdb",
+                        "users",
+                        1,
+                        "metric",
+                        "opentelemetry",
+                        "",
+                        "declared",
+                        "[1, 2, 3]",
+                    )
+                ]
+            elif "information_schema.columns" in query:
+                self._results = [
+                    ("id", "Int64", "TAG", "NO"),
+                    ("ts", "TimestampMillisecond", "TIMESTAMP", "NO"),
+                ]
+            elif "SELECT * FROM" in query:
+                self._results = [(1, "2024-01-01 00:00:00")]
+
+        def fetchall(self):
+            return self._results
+
+        def fetchone(self):
+            return None
+
+        @property
+        def description(self):
+            if "SELECT * FROM" in self.query:
+                return [("id", None), ("ts", None)]
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await describe_table(table="users")
+    data = json.loads(result)
+
+    assert data["semantics"]["found"] is True
+    assert data["semantics"]["options"] == {}
+    assert data["semantics"]["raw_options"] == "[1, 2, 3]"
+    assert "not a JSON object" in data["semantics"]["options_parse_error"]
+
+
+@pytest.mark.asyncio
 async def test_describe_table_not_found():
     """Test describe_table surfaces a clear error when no columns are visible."""
 
@@ -622,6 +695,16 @@ async def test_read_table_resource_invalid_name():
 async def test_describe_table_schema_qualified():
     """Test describe_table with schema.table format"""
     result = await describe_table(table="public.users")
+    data = json.loads(result)
+    assert data["table_schema"] == "public"
+    assert data["table_name"] == "users"
+    assert data["schema"]["time_index"] == "ts"
+
+
+@pytest.mark.asyncio
+async def test_describe_table_catalog_qualified():
+    """Test describe_table parses catalog.schema.table, ignoring the catalog."""
+    result = await describe_table(table="greptime.public.users")
     data = json.loads(result)
     assert data["table_schema"] == "public"
     assert data["table_name"] == "users"

@@ -463,6 +463,12 @@ def test_validate_table_name_schema_qualified():
     assert validate_table_name("my_schema.my_table") == "my_schema.my_table"
 
 
+def test_validate_table_name_catalog_qualified():
+    """Test validate_table_name accepts GreptimeDB-style catalog.schema.table"""
+    assert validate_table_name("greptime.public.users") == "greptime.public.users"
+    assert validate_table_name("cat.schema_name.tbl") == "cat.schema_name.tbl"
+
+
 def test_validate_table_name_invalid():
     """Test validate_table_name rejects invalid names"""
     with pytest.raises(ValueError) as excinfo:
@@ -474,7 +480,7 @@ def test_validate_table_name_invalid():
     assert "Invalid table name" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
-        validate_table_name("schema.table.extra")
+        validate_table_name("catalog.schema.table.extra")
     assert "Invalid table name" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:

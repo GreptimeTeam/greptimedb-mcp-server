@@ -118,10 +118,18 @@ def get_state() -> AppState:
 
 
 def _split_table_reference(table: str, default_schema: str) -> tuple[str, str]:
-    parts = table.split(".", 1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
-    return default_schema, table
+    """Split a possibly-qualified table reference into (schema, table).
+
+    Mirrors GreptimeDB's table_idents_to_full_name: the table name is always the
+    last segment, the schema the second-to-last. A leading catalog segment
+    (catalog.schema.table) is accepted for compatibility but ignored, since
+    information_schema is scoped to the connected catalog. Input is restricted to
+    at most three unquoted segments by validate_table_name.
+    """
+    parts = table.split(".")
+    if len(parts) == 1:
+        return default_schema, parts[0]
+    return parts[-2], parts[-1]
 
 
 def _quote_identifier(name: str) -> str:
@@ -214,10 +222,18 @@ def _fetch_table_semantics(cursor, table_schema: str, table_name: str) -> dict:
     parse_error = None
     if semantic_options:
         try:
-            options = json.loads(semantic_options)
+            parsed = json.loads(semantic_options)
         except (TypeError, json.JSONDecodeError) as e:
             raw_options = semantic_options
             parse_error = str(e)
+        else:
+            # Guidance treats options as a key/value map; a non-object payload
+            # would crash _build_table_guidance, so keep it as raw instead.
+            if isinstance(parsed, dict):
+                options = parsed
+            else:
+                raw_options = semantic_options
+                parse_error = "semantic_options is not a JSON object"
 
     result = {
         "included": True,
@@ -524,7 +540,11 @@ async def execute_sql(
 
 @mcp.tool()
 async def describe_table(
-    table: Annotated[str, "Table name to describe (supports schema.table format)"],
+    table: Annotated[
+        str,
+        "Table name to describe (supports table, schema.table, or "
+        "catalog.schema.table format)",
+    ],
     include_semantics: Annotated[
         bool,
         "Include table semantic metadata from information_schema.table_semantics",
