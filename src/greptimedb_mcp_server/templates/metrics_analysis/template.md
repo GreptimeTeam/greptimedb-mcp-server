@@ -8,7 +8,6 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 
 - `execute_sql` - Execute SQL queries (MySQL syntax)
 - `describe_table` - Get table schema
-- `execute_tql` - Execute PromQL-compatible queries
 - `query_range` - Time-window aggregations with RANGE syntax
 
 ## Guidelines
@@ -17,6 +16,7 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 2. Use `DESCRIBE table_name` to explore schema first
 3. Use aggregation functions: avg, max, min, sum, count, stddev
 4. Results are read-only; write operations are blocked
+5. Verify the actual time index and value column names before running examples
 
 ## Example Queries
 
@@ -40,6 +40,22 @@ SELECT
 FROM your_table
 WHERE ts >= '{{ start_time }}' AND ts < '{{ end_time }}';
 
+-- Time-window aggregation with RANGE query syntax
+SELECT
+    ts,
+    host,
+    avg(value) RANGE '5m' FILL NULL as avg_value
+FROM your_table
+WHERE ts >= '{{ start_time }}' AND ts < '{{ end_time }}'
+ALIGN '1m' BY (host)
+ORDER BY ts ASC;
+
+-- Latest point per time series
+SELECT DISTINCT ON (host) *
+FROM your_table
+WHERE ts >= '{{ start_time }}' AND ts < '{{ end_time }}'
+ORDER BY host, ts DESC;
+
 -- Anomaly detection (outside 2 stddev)
 WITH stats AS (
     SELECT avg(value) as m, stddev(value) as s
@@ -50,6 +66,12 @@ SELECT ts, value FROM your_table, stats
 WHERE ts >= '{{ start_time }}' AND ts < '{{ end_time }}'
   AND (value > m + 2*s OR value < m - 2*s);
 ```
+
+## Tool Notes
+
+- Use `query_range` for simple RANGE queries: pass the table, `select` expression, `align`, optional `where`, `by`, `fill`, and `order_by`
+- If the task is specifically PromQL-compatible metrics, use the `promql_analysis` prompt instead
+- For table or column names with special characters, use `describe_table` first and quote identifiers in raw SQL where needed
 
 ## References
 

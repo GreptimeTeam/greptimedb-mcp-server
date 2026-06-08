@@ -1,4 +1,4 @@
-description: "Comprehensive metrics analysis template for monitoring and analyzing data from GreptimeDB"
+description: "SQL and RANGE analysis for existing GreptimeDB time-series tables."
 version: "1.0"
 arguments:
   - name: "topic"
@@ -8,13 +8,13 @@ arguments:
     description: "Start time for the analysis period, example:(2025-01-01T00:00:00Z, now)"
     required: true
   - name: "end_time"
-    description: "End time for the analysis period, example:(2025-01-01T01:00:00Z, now-1h)"
+    description: "End time for the analysis period, example:(2025-01-01T01:00:00Z, now())"
     required: true
 metadata:
   tags:
     - monitoring
     - metrics
     - performance
-  suggested_use: "Use for system performance monitoring, resource usage analysis, and identifying performance bottlenecks"
+  suggested_use: "Analyze existing time-series tables with SQL and RANGE queries."
   output_format: "markdown"
  

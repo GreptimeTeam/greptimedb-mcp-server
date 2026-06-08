@@ -22,7 +22,7 @@ Analyze the log sample above and generate a GreptimeDB pipeline YAML configurati
 ## Pipeline Configuration Guidelines
 
 ### Version
-Always use `version: 2` for the latest pipeline format with auto-transform support.
+Use `version: 2` for current pipeline configurations.
 
 ### Processors (choose appropriate ones)
 
@@ -44,6 +44,15 @@ Always use `version: 2` for the latest pipeline format with auto-transform suppo
     patterns:
       - '(?<ip>\d+\.\d+\.\d+\.\d+).*\[(?<time>[^\]]+)\]'
     ignore_missing: true
+```
+
+**vrl** - Use VRL for nested JSON, conditional logic, or normalization that is hard
+to express with simple processors:
+```yaml
+- vrl:
+    source: |
+      .level = upcase(string!(.level))
+      .message_length = length(string!(.message))
 ```
 
 **date** - Parse formatted time strings:
@@ -120,7 +129,8 @@ transform:
 - `uint8`, `uint16`, `uint32`, `uint64`: Unsigned integers
 - `float32`, `float64`: Floating point
 - `time`: Parsed timestamp (from date/epoch processor)
-- `epoch, s|ms|us|ns`: Raw epoch timestamp with precision
+- `epoch, s|ms|us|ns`: Raw epoch timestamp with precision. Use this when the
+  source field should be converted directly in `transform`
 
 ### Index Types
 - `timestamp`: Time index column (required, exactly one)
@@ -131,8 +141,8 @@ transform:
 ## Output
 
 Generate a complete, valid YAML pipeline configuration. After generation:
-1. Use `create_pipeline` tool to create the pipeline
-2. Use `dryrun_pipeline` tool with inline pipeline YAML to verify with sample data
+1. Use `dryrun_pipeline` with inline pipeline YAML and representative sample data
+2. Only call `create_pipeline` after dry-run succeeds and the generated schema looks right
 
 **Note**: You can update an existing pipeline by calling `create_pipeline` with the same name. Each call creates a new version. Use `list_pipelines` to view all versions, and `delete_pipeline` to remove specific versions.
 
@@ -167,7 +177,8 @@ dryrun_pipeline(
 **Data Formats:**
 - **Single log entry:** `{"message": "127.0.0.1 - - [25/May/2024:20:16:37 +0000]"}`
 - **Multiple entries (JSON array):** `[{"message": "log1"}, {"message": "log2"}]`
-- **NDJSON (newline-delimited):** Use `data_type='application/x-ndjson'` with data like `"{"msg":"line1"}\n{"msg":"line2"}"`
+- **NDJSON (newline-delimited):** Use `data_type='application/x-ndjson'` with data like `{"msg":"line1"}\n{"msg":"line2"}`
+- **Plain text:** Use `data_type='text/plain'`; each line is available as the `message` field
 
 ## Common Log Format Examples
 
@@ -189,37 +200,12 @@ May 25 20:16:37 hostname app[1234]: Connection established from 192.168.1.1
 ```
 Pattern: `%{timestamp} %{hostname} %{app}[%{pid}]: %{message}`
 
-## Best Practices
+## Pipeline Scope
 
-### Tag Selection (Primary Key)
-- **For log tables, avoid using tags (primary keys)** - GreptimeDB sorts data by (primary key, timestamp), and for logs, sorting by timestamp alone is usually sufficient
-- If you must use tags, choose **low-cardinality fields** (< 10,000 unique values) like `service_name`, `region`, `log_level`
-- **Do NOT use high-cardinality fields as tags** (e.g., `request_id`, `trace_id`, `user_id`)
-
-### Index Selection
-| Index Type | When to Use | Supported Operations | Storage Overhead |
-|------------|-------------|---------------------|------------------|
-| `inverted` | Low-cardinality fields for filtering | `=`, `!=`, `IN`, `BETWEEN`, `>`, `<` | Medium-High |
-| `fulltext` | Unstructured text needing tokenized search | `@@` or `matches_term()` | High |
-| `skipping` | High-cardinality fields (e.g., `request_id`) | `=` only | Low |
-
-**Guidelines:**
-- Use `index: inverted` for fields like `status_code`, `method`, `log_level` - creates mapping between values and rows
-- Use `index: fulltext` for log message body or unstructured text - supports word-based matching
-- Use `index: skipping` for high-cardinality IDs like `request_id`, `trace_id`, `mac_address` - maintains min/max metadata per data block
-- **Only index columns frequently used in WHERE clauses** - unnecessary indexes waste storage and slow down ingestion
-- Fields without index can still be queried, just slower
-- Inverted index becomes inefficient with too many unique values - consider skipping index instead
-
-### Table Design for Logs
-- **Append-only mode**: Log tables should use append mode (no updates/deletes)
-- **No time-based partitioning needed**: GreptimeDB automatically partitions by TIME INDEX
-- **Partition by business dimension** if needed (e.g., by datacenter or application)
-
-### Other Tips
-- After parsing, use `select` processor to exclude the original `message` field to save storage
-- Always ensure exactly one field has `index: timestamp` - this is required
-- Prefer structured logging over full-text search for better query performance
+- Focus on parsing, type conversion, timestamp extraction, and `transform` output.
+- Keep the original `message` field when operators need raw log context or full-text search. Exclude it only when parsed fields are enough.
+- Ensure exactly one output field has `index: timestamp`.
+- Use `schema_design_advisor` for primary key, partitioning, retention, and broader table-design decisions.
 
 ## Troubleshooting
 
@@ -230,31 +216,31 @@ If `dryrun_pipeline` fails:
 - **Date format error**: Verify the date format string matches the timestamp in logs
 - **Missing fields**: Use `ignore_missing: true` in processors to handle optional fields
 - **Type conversion**: Ensure numeric fields (status_code, size) are converted to appropriate int types
-- **HTTP 401/403 errors**: Authentication is required for all HTTP API calls
+- **HTTP 401/403 errors**: Check whether GreptimeDB authentication is enabled and whether MCP credentials are configured
 
 ## HTTP API Authentication
 
-All GreptimeDB HTTP API calls require Basic Authentication. When providing curl examples for manual testing, always include the `-u` flag:
+The MCP tools use the configured HTTP credentials automatically. For manual
+curl examples, include `-u "<username>:<password>"` when authentication is
+enabled; omit it for unauthenticated local deployments.
 
 ```bash
 # Create pipeline
 curl -X POST "http://localhost:4000/v1/pipelines/my_pipeline" \
-  -u "<username>:<password>" \
   -H "Content-Type: application/x-yaml" \
   -d @pipeline.yaml
 
 # Dryrun pipeline (constructs JSON request internally)
 curl -X POST "http://localhost:4000/v1/pipelines/_dryrun" \
-  -u "<username>:<password>" \
   -H "Content-Type: application/json" \
   -d '{"pipeline": "version: 2", "data": "{\"timestamp\": \"2024-05-25T20:16:37Z\"}", "data_type": "application/json"}'
 
 # Delete pipeline
 curl -X DELETE "http://localhost:4000/v1/pipelines/my_pipeline?version=<version>" \
-  -u "<username>:<password>"
+  -u "<username>:<password>"  # only when auth is enabled
 ```
 
-Replace `<username>` and `<password>` with actual credentials. The MCP server tools (`create_pipeline`, `dryrun_pipeline`, `delete_pipeline`) handle authentication automatically using configured credentials.
+The MCP server tools (`create_pipeline`, `dryrun_pipeline`, `delete_pipeline`) handle authentication automatically using configured credentials.
 
 ## Example Output Format
 

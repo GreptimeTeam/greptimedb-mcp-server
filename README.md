@@ -67,7 +67,7 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 ### Resources & Prompts
 
 - **Resources**: Browse tables via `greptime://<table>/data` URIs
-- **Prompts**: Built-in templates for common tasks — `pipeline_creator`, `log_pipeline`, `metrics_analysis`, `promql_analysis`, `iot_monitoring`, `trace_analysis`, `table_operation`
+- **Prompts**: Built-in Jinja templates for common tasks — `pipeline_creator`, `log_pipeline`, `metrics_analysis`, `promql_analysis`, `trace_analysis`, `table_operation`, `schema_design_advisor`, `observability_correlation`, `ingestion_troubleshooting`, `query_performance_tuning`
 
 For LLM integration and prompt usage, see [docs/llm-instructions.md](docs/llm-instructions.md).
 

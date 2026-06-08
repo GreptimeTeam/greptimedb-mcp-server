@@ -1,4 +1,4 @@
-description: "Table diagnostics: schema, region health, storage analysis, and query optimization for GreptimeDB."
+description: "Table diagnostics: schema, region health, storage, and cluster metadata for GreptimeDB."
 version: "1.0"
 arguments:
   - name: "table"
@@ -10,5 +10,5 @@ metadata:
     - schema
     - region
     - storage
-  suggested_use: "Analyze table structure, region distribution, storage usage, and optimize queries."
+  suggested_use: "Inspect table structure, region distribution, storage usage, and cluster metadata."
   output_format: "markdown"

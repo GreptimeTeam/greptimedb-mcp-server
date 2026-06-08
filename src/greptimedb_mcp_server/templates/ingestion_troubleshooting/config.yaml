@@ -1,0 +1,20 @@
+description: "Troubleshoot GreptimeDB ingestion issues across OTLP, Prometheus, Loki, SQL, and pipelines."
+version: "1.0"
+arguments:
+  - name: "source"
+    description: "Ingestion source or protocol, such as OTLP, Prometheus remote write, Loki, InfluxDB line protocol, SQL, or pipeline."
+    required: true
+  - name: "table"
+    description: "Optional table name involved in the issue."
+    required: false
+  - name: "symptom"
+    description: "Observed symptom, error message, or unexpected query result."
+    required: false
+metadata:
+  tags:
+    - ingestion
+    - troubleshooting
+    - pipeline
+    - otlp
+  suggested_use: "Debug missing data, schema mismatch, timestamp problems, and pipeline ingestion failures."
+  output_format: "markdown"
