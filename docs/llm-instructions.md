@@ -13,7 +13,7 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 - `query_range`: Time-window aggregation with RANGE/ALIGN syntax
 - `describe_table`: Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance
 - `health_check`: Check database connection status
-- `explain_query`: Analyze query execution plans (`analyze=true` for runtime stats, `verbose=true` for per-partition scan metrics)
+- `explain_query`: Analyze query execution plans (`analyze=true` for runtime stats; add `verbose=true` alongside `analyze=true` for per-partition scan metrics and index-pruning counters)
 
 ### Pipeline Management
 - `list_pipelines`: View existing log pipelines
