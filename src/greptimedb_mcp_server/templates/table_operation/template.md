@@ -13,7 +13,7 @@ qualified name directly.
 ## Available Tools
 
 - `describe_table` - Inspect table profile: schema, semantic metadata, sample rows
-- `explain_query` - Analyze query execution plan (set `analyze=true` for runtime stats)
+- `explain_query` - Analyze query execution plan (set `analyze=true` for runtime stats, add `verbose=true` for per-partition scan metrics)
 - `execute_sql` - Run diagnostic SQL queries
 
 ## Schema Analysis

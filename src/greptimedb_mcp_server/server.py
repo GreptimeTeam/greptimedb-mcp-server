@@ -895,6 +895,13 @@ async def query_range(
 async def explain_query(
     query: Annotated[str, "SQL or TQL query to analyze"],
     analyze: Annotated[bool, "Execute and show actual metrics"] = False,
+    verbose: Annotated[
+        bool,
+        "Show detailed per-partition scan metrics; combine with "
+        "analyze=true to reveal index-pruning counters "
+        "(rg_bloom_filtered, rg_inverted_filtered, rg_minmax_filtered, "
+        "rows_bloom_filtered, rows_inverted_filtered)",
+    ] = False,
 ) -> str:
     """Analyze SQL or TQL query execution plan."""
     state = get_state()
@@ -907,8 +914,9 @@ async def explain_query(
         return f"Error: Dangerous operation blocked: {reason}"
 
     if query.strip().upper().startswith("TQL"):
-        # Replace TQL EVAL or TQL EVALUATE at start with TQL ANALYZE/EXPLAIN
-        replacement = "TQL ANALYZE" if analyze else "TQL EXPLAIN"
+        # Replace leading TQL EVAL/EVALUATE with TQL ANALYZE/EXPLAIN [VERBOSE].
+        base = "TQL ANALYZE" if analyze else "TQL EXPLAIN"
+        replacement = f"{base} VERBOSE" if verbose else base
         explain_query_str = re.sub(
             r"^\s*TQL\s+(EVAL(UATE)?)",
             replacement,
@@ -917,10 +925,13 @@ async def explain_query(
             flags=re.IGNORECASE,
         )
     else:
+        # EXPLAIN [ANALYZE] [VERBOSE] <query>; modifiers are orthogonal.
+        keywords = "EXPLAIN"
         if analyze:
-            explain_query_str = f"EXPLAIN ANALYZE {query}"
-        else:
-            explain_query_str = f"EXPLAIN {query}"
+            keywords += " ANALYZE"
+        if verbose:
+            keywords += " VERBOSE"
+        explain_query_str = f"{keywords} {query}"
 
     def _sync_explain():
         with state.get_connection() as conn:

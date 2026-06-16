@@ -44,7 +44,7 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 | `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
 | `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
 | `describe_table` | Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance |
-| `explain_query` | Analyze SQL or TQL query execution plans |
+| `explain_query` | Analyze SQL or TQL query execution plans (`analyze=true` for runtime stats, `verbose=true` for per-partition scan metrics) |
 | `health_check` | Check database connection status and server version |
 
 ### Pipeline Management

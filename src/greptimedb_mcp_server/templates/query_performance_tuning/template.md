@@ -20,8 +20,8 @@ Query:
 1. Run `explain_query(query=..., analyze=false)` first.
 2. If the query is safe and bounded by time or `LIMIT`, run
    `explain_query(query=..., analyze=true)`.
-   If scan-level metrics are needed, use `execute_sql` with
-   `EXPLAIN ANALYZE VERBOSE <query>`.
+   For scan-level metrics (per-partition index pruning, row-group
+   filtering), run `explain_query(query=..., analyze=true, verbose=true)`.
 3. Use `describe_table` or `SHOW CREATE TABLE` only to confirm the time index, primary key, and indexed columns needed to interpret the plan.
 4. Check whether time filters, primary key ordering, partition pruning, and
    secondary indexes can be used.

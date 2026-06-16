@@ -696,6 +696,51 @@ async def test_explain_query_dangerous_blocked():
     assert "Error: Dangerous operation blocked" in result
 
 
+def _spy_executed_queries(monkeypatch):
+    """Capture every SQL string passed to the mocked cursor."""
+    import conftest
+
+    captured = []
+    original = conftest.MockCursor.execute
+
+    def spy(self, query, args=None):
+        captured.append(query)
+        return original(self, query, args)
+
+    monkeypatch.setattr(conftest.MockCursor, "execute", spy)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_explain_query_with_verbose(monkeypatch):
+    """analyze=true + verbose=true must emit EXPLAIN ANALYZE VERBOSE"""
+    captured = _spy_executed_queries(monkeypatch)
+
+    await explain_query(query="SELECT * FROM users", analyze=True, verbose=True)
+
+    assert any("EXPLAIN ANALYZE VERBOSE" in q for q in captured)
+
+
+@pytest.mark.asyncio
+async def test_explain_query_verbose_without_analyze(monkeypatch):
+    """verbose is orthogonal to analyze: EXPLAIN VERBOSE without ANALYZE"""
+    captured = _spy_executed_queries(monkeypatch)
+
+    await explain_query(query="SELECT * FROM users", verbose=True)
+
+    assert any(q.strip().startswith("EXPLAIN VERBOSE") for q in captured)
+
+
+@pytest.mark.asyncio
+async def test_explain_query_tql_verbose(monkeypatch):
+    """verbose=true on TQL must emit TQL ANALYZE VERBOSE"""
+    captured = _spy_executed_queries(monkeypatch)
+
+    await explain_query(query="TQL EVAL (0, 100, '30s') up", analyze=True, verbose=True)
+
+    assert any("TQL ANALYZE VERBOSE" in q for q in captured)
+
+
 @pytest.mark.asyncio
 async def test_read_table_resource():
     """Test reading a table resource"""
