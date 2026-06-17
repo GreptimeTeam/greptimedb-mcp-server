@@ -6,12 +6,12 @@
     "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
     "source": "github"
   },
-  "version": "0.5.0",
+  "version": "0.5.1",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "greptimedb-mcp-server",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "transport": {
         "type": "stdio"
       },
