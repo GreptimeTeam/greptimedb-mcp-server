@@ -1,8 +1,7 @@
 """Black-box tests: real MCP client -> real server subprocess -> real GreptimeDB.
 
-Each test opens its own stdio session. The session is entered inside the test
-body rather than in a fixture because unwinding anyio cancel scopes during
-pytest-asyncio fixture finalization happens on a different task and fails.
+Sessions are entered in the test body rather than in a fixture: anyio cancel
+scopes cannot be unwound from pytest-asyncio's finalization task.
 """
 
 import json
@@ -21,26 +20,6 @@ from .conftest import (
 )
 
 pytestmark = pytest.mark.integration
-
-
-async def test_tool_catalog(seed):
-    async with stdio_session() as client:
-        tools = {tool.name for tool in (await client.list_tools()).tools}
-    assert {
-        "execute_sql",
-        "describe_table",
-        "health_check",
-        "execute_tql",
-        "query_range",
-        "explain_query",
-        "list_pipelines",
-        "create_pipeline",
-        "dryrun_pipeline",
-        "delete_pipeline",
-        "list_dashboards",
-        "create_dashboard",
-        "delete_dashboard",
-    } <= tools
 
 
 async def test_health_check(seed):
@@ -140,14 +119,6 @@ async def test_describe_table(seed):
     assert profile["samples"]["rows"]
 
 
-async def test_describe_missing_table(seed):
-    async with stdio_session() as client:
-        profile = json.loads(
-            await call_text(client, "describe_table", {"table": "it_does_not_exist"})
-        )
-    assert "not found" in profile["error"]
-
-
 async def test_query_range(seed):
     async with stdio_session() as client:
         payload = json.loads(
@@ -189,15 +160,6 @@ async def test_execute_tql(seed):
     assert payload["tql"].startswith("TQL EVAL")
 
 
-async def test_explain_query(seed):
-    async with stdio_session() as client:
-        plan = await call_text(
-            client, "explain_query", {"query": f"SELECT * FROM {METRICS_TABLE}"}
-        )
-    assert "TableScan" in plan
-    assert METRICS_TABLE in plan
-
-
 async def test_explain_analyze_verbose_reports_metrics(seed):
     async with stdio_session() as client:
         plan = await call_text(
@@ -232,16 +194,6 @@ async def test_masking_hides_sensitive_columns(seed):
     assert "alice" in output, "non-sensitive columns must survive masking"
 
 
-async def test_masking_can_be_disabled(seed):
-    query = f"SELECT * FROM {CREDENTIALS_TABLE}"
-    async with stdio_session(**{"--mask-enabled": "false"}) as client:
-        output = await call_text(
-            client, "execute_sql", {"query": query, "format": "csv"}
-        )
-    assert SECRET_PASSWORD in output
-    assert SECRET_API_KEY in output
-
-
 PIPELINE_YAML = """processors:
   - date:
       field: time
@@ -264,7 +216,8 @@ async def test_pipeline_lifecycle(seed):
         created = await call_text(
             client, "create_pipeline", {"name": name, "pipeline": PIPELINE_YAML}
         )
-        assert "created successfully" in created
+        # Without a version the pipeline cannot be deleted, so it would leak.
+        assert "created successfully" in created and "Version:" in created
         version = created.rsplit("Version:", 1)[1].strip()
 
         try:

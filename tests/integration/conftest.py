@@ -1,9 +1,7 @@
 """Fixtures for black-box tests against a live GreptimeDB instance.
 
-Nothing is mocked here: the MCP server runs as a real subprocess and talks to a
-real database over the MySQL and HTTP protocols. Seed data is loaded through a
-direct MySQL connection rather than through the server, so a broken server
-cannot make its own fixtures pass.
+Seed data is loaded over a direct MySQL connection rather than through the
+server, so a broken server cannot make its own fixtures pass.
 
 Deselected by default; run with `pytest -m integration`.
 """
@@ -41,8 +39,6 @@ MASK_PLACEHOLDER = "******"
 
 @dataclass(frozen=True)
 class SeedData:
-    """Describes the rows loaded by the `seed` fixture."""
-
     base_ms: int
     hosts: tuple[str, ...]
     points_per_host: int
@@ -122,13 +118,16 @@ def seed(db):
 
 
 def server_argv(**overrides) -> list[str]:
-    """Build the CLI argv for a server subprocess pointed at the test instance."""
+    """Build the CLI argv for a server subprocess pointed at the test instance.
+
+    Audit logging is left enabled on purpose: it monkey-patches the SDK's private
+    tool manager, so every tool call here also proves that hook still works.
+    """
     flags = {
         "--host": HOST,
         "--port": str(MYSQL_PORT),
         "--http-port": str(HTTP_PORT),
         "--database": DATABASE,
-        "--audit-enabled": "false",
     }
     flags.update(overrides)
     argv = []
@@ -194,7 +193,11 @@ async def streamable_http_session(**overrides):
                 yield session
     finally:
         process.terminate()
-        process.wait(timeout=15)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 async def call_text(session: ClientSession, name: str, arguments=None) -> str:

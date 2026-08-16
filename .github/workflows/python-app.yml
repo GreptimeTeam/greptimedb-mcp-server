@@ -39,10 +39,8 @@ jobs:
       run: |
         uv run pytest
 
-  # Installs the built wheel the way an end user would: fresh dependency
-  # resolution from the published metadata, no dev dependencies, no source tree
-  # on sys.path. Covers what `uv sync` + pytest cannot -- wheel packaging (the
-  # templates/ data files) and the console script entry point.
+  # Installs the wheel the way an end user would: fresh dependency resolution
+  # from the published metadata, no dev dependencies, no source tree on sys.path.
   install-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -60,10 +58,8 @@ jobs:
         /tmp/smoke/bin/python -c "from mcp.server.fastmcp import FastMCP; import greptimedb_mcp_server.server"
         /tmp/smoke/bin/greptimedb-mcp-server --help
 
-  # Black-box tests: a real MCP client drives a real server subprocess against a
-  # real GreptimeDB. Started with `docker run` rather than `services:` because
-  # the image needs a `standalone start ...` command, which `services:` cannot
-  # provide.
+  # Uses `docker run` rather than `services:` because the image needs a
+  # `standalone start ...` command, which `services:` cannot provide.
   integration:
     runs-on: ubuntu-latest
     steps:
@@ -79,8 +75,8 @@ jobs:
           standalone start --http-addr 0.0.0.0:4000 --mysql-addr 0.0.0.0:4002
     - name: Wait for GreptimeDB
       run: |
-        # /status returns the build info, so this also proves we reached
-        # GreptimeDB itself and not some other service on the port.
+        # Grepping /status for the build info also proves we reached GreptimeDB
+        # and not some other service bound to the port.
         for _ in $(seq 1 60); do
           if curl -sf http://127.0.0.1:4000/status | grep -q '"version"'; then
             curl -s http://127.0.0.1:4000/status
