@@ -38,3 +38,59 @@ jobs:
     - name: Test with pytest
       run: |
         uv run pytest
+
+  # Installs the wheel the way an end user would: fresh dependency resolution
+  # from the published metadata, no dev dependencies, no source tree on sys.path.
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v5
+    - name: Build wheel
+      run: uv build --wheel
+    - name: Install wheel in a clean environment
+      run: |
+        uv venv --python 3.11 /tmp/smoke
+        VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+    - name: Import smoke test
+      run: |
+        /tmp/smoke/bin/python -c "from mcp.server.fastmcp import FastMCP; import greptimedb_mcp_server.server"
+        /tmp/smoke/bin/greptimedb-mcp-server --help
+
+  # Uses `docker run` rather than `services:` because the image needs a
+  # `standalone start ...` command, which `services:` cannot provide.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v5
+    - run: uv python pin cp311
+    - name: Start GreptimeDB
+      run: |
+        docker run -d --name greptimedb \
+          -p 127.0.0.1:4000:4000 -p 127.0.0.1:4002:4002 \
+          greptime/greptimedb:v1.2.0-beta.1 \
+          standalone start --http-addr 0.0.0.0:4000 --mysql-addr 0.0.0.0:4002
+    - name: Wait for GreptimeDB
+      run: |
+        # Grepping /status for the build info also proves we reached GreptimeDB
+        # and not some other service bound to the port.
+        for _ in $(seq 1 60); do
+          if curl -sf http://127.0.0.1:4000/status | grep -q '"version"'; then
+            curl -s http://127.0.0.1:4000/status
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "GreptimeDB did not become ready in time"
+        docker logs greptimedb
+        exit 1
+    - name: Install dependencies
+      run: uv sync
+    - name: Run integration tests
+      run: uv run pytest -m integration tests/integration -v
+    - name: GreptimeDB logs
+      if: failure()
+      run: docker logs greptimedb
