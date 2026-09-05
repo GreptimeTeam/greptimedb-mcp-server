@@ -12,8 +12,6 @@ from dataclasses import dataclass
 
 from mysql.connector import Error
 
-from greptimedb_mcp_server.utils import escape_like_pattern
-
 VIEW = "information_schema.table_semantics"
 
 COLUMNS = (
@@ -98,7 +96,7 @@ class SearchRequest:
                 f"Invalid signal_type: {signal_type}. "
                 f"Must be one of: {', '.join(VALID_SIGNAL_TYPES)}"
             )
-        terms = search_terms(query)
+        terms = _search_terms(query)
         if not terms:
             raise ValueError(
                 "query must contain at least one term of two or more characters"
@@ -120,11 +118,13 @@ def _join_slash_abbreviations(value: str) -> str:
     return re.sub(r"\b([A-Za-z])\s*/\s*([A-Za-z])\b", r"\1\2", value)
 
 
-def search_terms(query: str) -> list[str]:
+def _search_terms(query: str) -> list[str]:
     """Split a concept query into distinct searchable terms.
 
     Underscores become separators so that a query for `used memory` still
-    matches `redis___used_memory_`.
+    matches `redis___used_memory_`. The character class also keeps LIKE
+    metacharacters out of a term, which is what lets a term go into a LIKE
+    pattern as-is.
     """
     normalized = _join_slash_abbreviations(query).lower().replace("_", " ")
     terms = (
@@ -135,7 +135,7 @@ def search_terms(query: str) -> list[str]:
     return list(dict.fromkeys(terms))[:MAX_SEARCH_TERMS]
 
 
-def matched_terms(terms: list[str], searchable: str) -> list[str]:
+def _matched_terms(terms: list[str], searchable: str) -> list[str]:
     """Return the terms a candidate matched, for ranking.
 
     Terms of one or two characters must match a whole token: a substring test
@@ -315,7 +315,7 @@ def _build_search_sql(
     # and leave every surviving row with an identical score.
     term_clauses = []
     for term in request.terms:
-        pattern = f"%{escape_like_pattern(term)}%"
+        pattern = f"%{term}%"
         # COALESCE keeps a NULL column from making the whole OR group NULL,
         # which would drop rows that matched on another column.
         clauses = [f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable]
@@ -350,7 +350,7 @@ def _candidate(values: dict, terms: list[str]) -> dict | None:
     searchable = " ".join(
         str(values.get(column)) for column in SEARCH_COLUMNS if values.get(column)
     )
-    matched = matched_terms(terms, searchable)
+    matched = _matched_terms(terms, searchable)
     if not matched:
         # The SQL LIKE matched a substring the ranking rules reject, such as a
         # short term inside a longer word.

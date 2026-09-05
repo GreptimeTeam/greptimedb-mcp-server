@@ -44,7 +44,6 @@ from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
 
 # Constants
-RES_PREFIX = "greptime://"
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
 MAX_SAMPLE_LIMIT = 20

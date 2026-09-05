@@ -140,18 +140,6 @@ def validate_table_name(table: str) -> str:
     return table
 
 
-def escape_like_pattern(value: str) -> str:
-    """Neutralize LIKE wildcards in a value that is bound as a parameter.
-
-    GreptimeDB rejects the ESCAPE clause but treats a backslash as the escape
-    character, so the value is escaped for that default. Parameter binding
-    handles quoting; this only keeps `%` and `_` from matching as wildcards.
-    """
-    for char in ("\\", "%", "_"):
-        value = value.replace(char, "\\" + char)
-    return value
-
-
 def validate_tql_param(value: str, name: str) -> str:
     """Validate TQL parameter doesn't contain injection characters."""
     if not value:
