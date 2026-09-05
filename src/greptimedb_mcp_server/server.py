@@ -485,18 +485,22 @@ def tool(**tool_kwargs):
     """
 
     def decorator(fn):
+        # The audited subject is the name the client called, which is the
+        # registered name rather than the function's.
+        name = tool_kwargs.get("name") or fn.__name__
+
         @functools.wraps(fn)
         async def wrapper(**arguments):
             start_time = time.time()
             try:
                 result = await fn(**arguments)
             except ValueError as e:
-                _audit(fn.__name__, arguments, start_time, e)
+                _audit(name, arguments, start_time, e)
                 raise ToolError(str(e)) from e
             except Exception as e:
-                _audit(fn.__name__, arguments, start_time, e)
+                _audit(name, arguments, start_time, e)
                 raise
-            _audit(fn.__name__, arguments, start_time)
+            _audit(name, arguments, start_time)
             return result
 
         mcp.tool(**tool_kwargs)(wrapper)

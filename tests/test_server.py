@@ -1,5 +1,7 @@
 import pytest
 import json
+import logging
+from dataclasses import replace
 
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
@@ -1106,3 +1108,21 @@ async def test_delete_dashboard_invalid_name():
     with pytest.raises(ToolError) as excinfo:
         await delete_dashboard(name="123.invalid")
     assert "Invalid dashboard name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_audit_uses_registered_tool_name(caplog):
+    """Audit records the name the client called, not the function's."""
+    server._config = replace(server._config, audit_enabled=True)
+
+    @server.tool(name="renamed_tool")
+    async def original_name() -> str:
+        return "ok"
+
+    try:
+        with caplog.at_level(logging.INFO, logger="greptimedb_mcp_server.audit"):
+            await original_name()
+    finally:
+        server.mcp.remove_tool("renamed_tool")
+
+    assert "[AUDIT] renamed_tool" in caplog.text
