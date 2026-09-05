@@ -7,7 +7,7 @@ scopes cannot be unwound from pytest-asyncio's finalization task.
 import json
 
 import pytest
-from pydantic import AnyUrl
+from mcp import MCPError
 
 from .conftest import (
     CREDENTIALS_TABLE,
@@ -174,9 +174,24 @@ async def test_explain_analyze_verbose_reports_metrics(seed):
     assert "output_rows" in plan
 
 
+async def test_invalid_argument_reports_the_reason(seed):
+    """The SDK reports a plain exception with a generic message, so the tool
+    and resource wrappers must translate validation failures."""
+    async with stdio_session() as client:
+        result = await client.call_tool(
+            "execute_sql", {"query": "SELECT 1", "format": "xml"}
+        )
+        assert result.is_error
+        assert "Invalid format" in result.content[0].text
+
+        with pytest.raises(MCPError) as excinfo:
+            await client.read_resource("greptime://123invalid/data")
+        assert "Invalid table name" in str(excinfo.value)
+
+
 async def test_read_table_resource(seed):
     async with stdio_session() as client:
-        result = await client.read_resource(AnyUrl(f"greptime://{METRICS_TABLE}/data"))
+        result = await client.read_resource(f"greptime://{METRICS_TABLE}/data")
     body = result.contents[0].text
     assert body.splitlines()[0] == "ts,host,cpu"
     assert len(body.splitlines()) == seed.row_count + 1

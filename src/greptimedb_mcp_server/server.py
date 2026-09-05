@@ -1,4 +1,4 @@
-"""GreptimeDB MCP Server using FastMCP API."""
+"""GreptimeDB MCP Server built on the MCP Python SDK v2 MCPServer API."""
 
 import asyncio
 import sys
@@ -24,6 +24,7 @@ from greptimedb_mcp_server.utils import (
     render_prompt_template,
 )
 
+import functools
 import json
 import logging
 import re
@@ -35,8 +36,9 @@ from typing import Annotated
 from urllib.parse import quote
 
 import aiohttp
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import TransportSecuritySettings
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
 
@@ -395,7 +397,7 @@ def _build_table_guidance(schema: dict, semantics: dict, samples: dict) -> list[
 
 
 @asynccontextmanager
-async def lifespan(mcp: FastMCP):
+async def lifespan(mcp: MCPServer):
     """Initialize application state on startup."""
     global _state
 
@@ -453,11 +455,55 @@ async def lifespan(mcp: FastMCP):
             await _state.http_session.close()
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "greptimedb_mcp_server",
     instructions="GreptimeDB MCP Server - provides secure read-only access to GreptimeDB",
     lifespan=lifespan,
 )
+
+
+def _audit(
+    name: str, arguments: dict, start_time: float, error: Exception | None = None
+) -> None:
+    if _config is None or not _config.audit_enabled:
+        return
+    audit_log(
+        name,
+        arguments,
+        success=error is None,
+        duration_ms=(time.time() - start_time) * 1000,
+        error=str(error) if error is not None else None,
+    )
+
+
+def tool(**tool_kwargs):
+    """Register an async tool, adding audit logging and error translation.
+
+    The SDK reports any exception that is not a `ToolError` with a generic
+    message, so validation failures are re-raised as `ToolError` to keep the
+    reason visible to the client.
+    """
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(**arguments):
+            start_time = time.time()
+            try:
+                result = await fn(**arguments)
+            except ValueError as e:
+                _audit(fn.__name__, arguments, start_time, e)
+                raise ToolError(str(e)) from e
+            except Exception as e:
+                _audit(fn.__name__, arguments, start_time, e)
+                raise
+            _audit(fn.__name__, arguments, start_time)
+            return result
+
+        mcp.tool(**tool_kwargs)(wrapper)
+        return wrapper
+
+    return decorator
+
 
 # Query type constants
 _READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
@@ -549,7 +595,7 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
             return {"type": "modify", "rowcount": cursor.rowcount}
 
 
-@mcp.tool()
+@tool()
 async def execute_sql(
     query: Annotated[str, "The SQL query to execute (using MySQL dialect)"],
     format: Annotated[
@@ -583,7 +629,7 @@ async def execute_sql(
         return f"Error executing query: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def describe_table(
     table: Annotated[
         str,
@@ -673,7 +719,7 @@ async def describe_table(
         )
 
 
-@mcp.tool()
+@tool()
 async def health_check() -> str:
     """Check GreptimeDB connection status and server version."""
     state = get_state()
@@ -712,7 +758,7 @@ async def health_check() -> str:
         return json.dumps(result, indent=2)
 
 
-@mcp.tool()
+@tool()
 async def execute_tql(
     query: Annotated[
         str,
@@ -797,7 +843,7 @@ async def execute_tql(
         return f"Error executing TQL: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def query_range(
     table: Annotated[str, "Table name to query (supports schema.table format)"],
     select: Annotated[
@@ -891,7 +937,7 @@ async def query_range(
         return f"Error executing range query: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def explain_query(
     query: Annotated[str, "SQL or TQL query to analyze"],
     analyze: Annotated[bool, "Execute and show actual metrics"] = False,
@@ -958,7 +1004,11 @@ async def explain_query(
 async def read_table_resource(table: str) -> str:
     """Read table contents (limited to 100 rows)."""
     state = get_state()
-    table = validate_table_name(table)
+    try:
+        table = validate_table_name(table)
+    except ValueError as e:
+        # Same reason as in `tool()`: only a ResourceError keeps its message.
+        raise ResourceError(str(e)) from e
 
     def _sync_read_table():
         with state.get_connection() as conn:
@@ -978,7 +1028,7 @@ async def read_table_resource(table: str) -> str:
         return await asyncio.to_thread(_sync_read_table)
     except Error as e:
         logger.error(f"Database error reading table {table}: {str(e)}")
-        raise RuntimeError(f"Database error: {str(e)}")
+        raise ResourceError(f"Database error: {str(e)}") from e
 
 
 PIPELINE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -1004,7 +1054,7 @@ def _format_pipeline_version(ns_timestamp: int) -> str:
     return f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{nanoseconds:09d}"
 
 
-@mcp.tool()
+@tool()
 async def list_pipelines(
     name: Annotated[str | None, "Optional pipeline name to filter by"] = None,
 ) -> str:
@@ -1059,7 +1109,7 @@ async def list_pipelines(
         return f"Error listing pipelines: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def create_pipeline(
     name: Annotated[str, "Name of the pipeline to create"],
     pipeline: Annotated[str, "Pipeline configuration in YAML format"],
@@ -1101,7 +1151,7 @@ async def create_pipeline(
         return f"Error creating pipeline: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def dryrun_pipeline(
     pipeline: Annotated[
         str | None,
@@ -1185,7 +1235,7 @@ async def dryrun_pipeline(
         return f"Error testing pipeline: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def delete_pipeline(
     name: Annotated[str, "Name of the pipeline to delete"],
     version: Annotated[str, "Version of the pipeline to delete (timestamp)"],
@@ -1232,7 +1282,7 @@ def _validate_dashboard_name(name: str) -> str:
     return name
 
 
-@mcp.tool()
+@tool()
 async def list_dashboards() -> str:
     """List all Perses dashboard definitions stored in GreptimeDB."""
     state = get_state()
@@ -1260,7 +1310,7 @@ async def list_dashboards() -> str:
         return f"Error listing dashboards: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def create_dashboard(
     name: Annotated[str, "Name of the dashboard"],
     definition: Annotated[str, "Perses dashboard definition in JSON format"],
@@ -1298,7 +1348,7 @@ async def create_dashboard(
         return f"Error creating dashboard: {str(e)}"
 
 
-@mcp.tool()
+@tool()
 async def delete_dashboard(
     name: Annotated[str, "Name of the dashboard to delete"],
 ) -> str:
@@ -1383,25 +1433,28 @@ def prompt_fn({arg_params}) -> str:
 _register_prompts()
 
 
-def _install_audit_hook():
-    """Install audit logging hook by wrapping tool manager's call_tool method."""
-    original_call_tool = mcp._tool_manager.call_tool
+def _transport_security(config: Config) -> TransportSecuritySettings:
+    """Build DNS rebinding protection settings.
 
-    async def audited_call_tool(name, arguments, context=None, convert_result=False):
-        start_time = time.time()
-        try:
-            result = await original_call_tool(name, arguments, context, convert_result)
-            elapsed_ms = (time.time() - start_time) * 1000
-            audit_log(name, arguments, success=True, duration_ms=elapsed_ms)
-            return result
-        except Exception as e:
-            elapsed_ms = (time.time() - start_time) * 1000
-            audit_log(
-                name, arguments, success=False, duration_ms=elapsed_ms, error=str(e)
-            )
-            raise
+    An empty allowed_hosts disables protection, for compatibility with proxies,
+    gateways, and Kubernetes services.
+    """
+    if not config.allowed_hosts:
+        logger.info("DNS rebinding protection: disabled")
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
-    mcp._tool_manager.call_tool = audited_call_tool
+    kwargs = {
+        "enable_dns_rebinding_protection": True,
+        "allowed_hosts": config.allowed_hosts,
+    }
+    if config.allowed_origins:
+        kwargs["allowed_origins"] = config.allowed_origins
+    logger.info(
+        f"DNS rebinding protection: enabled "
+        f"(allowed_hosts: {config.allowed_hosts}, "
+        f"allowed_origins: {config.allowed_origins or 'default'})"
+    )
+    return TransportSecuritySettings(**kwargs)
 
 
 def main():
@@ -1409,51 +1462,23 @@ def main():
     global _config
     _config = Config.from_env_arguments()
 
-    # Install audit logging hook if enabled
-    if _config.audit_enabled:
-        _install_audit_hook()
-        logger.info("Audit logging: enabled")
-    else:
-        logger.info("Audit logging: disabled")
+    logger.info(f"Audit logging: {'enabled' if _config.audit_enabled else 'disabled'}")
 
-    # Only configure HTTP server settings for non-stdio transports
-    # to avoid overriding user's programmatic configuration
-    if _config.transport != "stdio":
-        mcp.settings.host = _config.listen_host
-        mcp.settings.port = _config.listen_port
-
-        # Configure DNS rebinding protection
-        # If allowed_hosts is empty, disable protection for compatibility
-        # with proxies, gateways, and Kubernetes services
-        if _config.allowed_hosts:
-            security_kwargs = {
-                "enable_dns_rebinding_protection": True,
-                "allowed_hosts": _config.allowed_hosts,
-            }
-            if _config.allowed_origins:
-                security_kwargs["allowed_origins"] = _config.allowed_origins
-            mcp.settings.transport_security = TransportSecuritySettings(
-                **security_kwargs
-            )
-            logger.info(
-                f"DNS rebinding protection: enabled "
-                f"(allowed_hosts: {_config.allowed_hosts}, "
-                f"allowed_origins: {_config.allowed_origins or 'default'})"
-            )
-        else:
-            mcp.settings.transport_security = TransportSecuritySettings(
-                enable_dns_rebinding_protection=False,
-            )
-            logger.info("DNS rebinding protection: disabled")
-
-        logger.info(
-            f"Starting MCP server with transport: {_config.transport} "
-            f"on {_config.listen_host}:{_config.listen_port}"
-        )
-    else:
+    if _config.transport == "stdio":
         logger.info("Starting MCP server with transport: stdio")
+        mcp.run()
+        return
 
-    mcp.run(transport=_config.transport)
+    logger.info(
+        f"Starting MCP server with transport: {_config.transport} "
+        f"on {_config.listen_host}:{_config.listen_port}"
+    )
+    mcp.run(
+        transport=_config.transport,
+        host=_config.listen_host,
+        port=_config.listen_port,
+        transport_security=_transport_security(_config),
+    )
 
 
 if __name__ == "__main__":
