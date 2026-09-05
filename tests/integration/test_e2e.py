@@ -5,6 +5,7 @@ scopes cannot be unwound from pytest-asyncio's finalization task.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from mcp import MCPError
@@ -12,6 +13,7 @@ from mcp import MCPError
 from .conftest import (
     CREDENTIALS_TABLE,
     MASK_PLACEHOLDER,
+    GRAPH_EDGES,
     METRICS_TABLE,
     SECRET_API_KEY,
     SECRET_PASSWORD,
@@ -330,3 +332,156 @@ async def test_describe_table_reports_entity_declarations(seed):
             "does not expose entity_declarations" in line
             for line in profile["guidance"]
         )
+
+
+def _graph_window(seed):
+    """A window wide enough to contain the seeded edges."""
+    base = datetime.fromtimestamp(seed.base_ms / 1000, tz=timezone.utc)
+    return {
+        "start_time": (base - timedelta(minutes=30)).isoformat(),
+        "end_time": (base + timedelta(minutes=30)).isoformat(),
+    }
+
+
+async def test_graph_tool_is_withdrawn_without_a_graph(seed):
+    """A server whose database has no graph must not advertise the tool."""
+    async with stdio_session() as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+
+    assert ("query_semantic_graph" in names) is seed.graph_seeded
+
+
+async def test_graph_summary_reports_shape_without_returning_edges(seed):
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    async with stdio_session() as client:
+        payload = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {"view": "summary", **_graph_window(seed)},
+            )
+        )
+
+    by_type = {item["type"]: item for item in payload["relationship_types"]}
+    assert by_type["calls"]["count"] == 2
+    assert by_type["calls"]["endpoints"] == [
+        {"source": "service", "destination": "service", "count": 2}
+    ]
+    # Pairs, not two sets: service->pod and pod->node must not read as
+    # service->node.
+    assert by_type["runs_on"]["endpoints"] == [
+        {"source": "k8s.pod", "destination": "k8s.node", "count": 1},
+        {"source": "service", "destination": "k8s.pod", "count": 1},
+    ]
+    assert "items" not in payload
+
+
+async def test_graph_window_is_read_in_utc_whatever_the_session(seed):
+    """A literal without an offset is read in the session time zone."""
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    window = _graph_window(seed)
+    async with stdio_session(**{"--timezone": "Asia/Shanghai"}) as client:
+        payload = json.loads(
+            await call_text(
+                client, "query_semantic_graph", {"view": "summary", **window}
+            )
+        )
+
+    assert payload["relationship_count"] == len(GRAPH_EDGES)
+
+
+async def test_graph_returns_identifiers_verbatim(seed):
+    """A caller has to be able to feed a returned id straight back in."""
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    window = _graph_window(seed)
+    async with stdio_session() as client:
+        payload = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {"view": "relationships", "rel_type": "calls", **window},
+            )
+        )
+        first = payload["items"][0]
+        refetched = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {
+                    "view": "relationships",
+                    "src_id": first["src_id"],
+                    "dst_id": first["dst_id"],
+                    **window,
+                },
+            )
+        )
+
+    assert isinstance(first["src_id"], str)
+    assert refetched["item_count"] == 1
+
+
+async def test_graph_orders_mixed_relationships_by_type_not_red(seed):
+    """Only `calls` has RED; sorting a mixed result by it buries the rest."""
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    window = _graph_window(seed)
+    async with stdio_session() as client:
+        mixed = json.loads(
+            await call_text(
+                client, "query_semantic_graph", {"view": "relationships", **window}
+            )
+        )
+        calls = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {"view": "relationships", "rel_type": "calls", **window},
+            )
+        )
+
+    assert [item["rel_type"] for item in mixed["items"]] == sorted(
+        item["rel_type"] for item in mixed["items"]
+    )
+    assert [item["error_count"] for item in calls["items"]] == [45, 7]
+
+
+async def test_graph_zero_result_keeps_the_envelope(seed):
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    async with stdio_session() as client:
+        payload = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {
+                    "view": "relationships",
+                    "rel_type": "calls",
+                    "src_id": "not-a-graph-id",
+                    **_graph_window(seed),
+                },
+            )
+        )
+
+    assert payload["status"] == "no_match"
+    assert payload["items"] == []
+    assert payload["applied_filters"]["rel_type"] == "calls"
+
+    # The suggested retry drops the identifier, keeps the type filter, and
+    # carries the window, so a caller can run it as given.
+    next_query = payload["guidance"]["next_query"]
+    assert "src_id" not in next_query
+    assert next_query["rel_type"] == "calls"
+
+    async with stdio_session() as client:
+        retried = json.loads(
+            await call_text(client, "query_semantic_graph", next_query)
+        )
+    assert retried["status"] == "ok"

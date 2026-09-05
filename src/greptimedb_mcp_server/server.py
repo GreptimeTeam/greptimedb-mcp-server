@@ -8,7 +8,7 @@ import sys
 if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-http")):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from greptimedb_mcp_server import semantics
+from greptimedb_mcp_server import graph, semantics
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
 from greptimedb_mcp_server.utils import (
@@ -33,10 +33,11 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 import aiohttp
+from pydantic import Field
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -70,6 +71,7 @@ class AppState:
     table_semantics: semantics.SemanticsView = field(
         default_factory=semantics.SemanticsView
     )
+    semantic_graph: graph.GraphView = field(default_factory=graph.GraphView)
 
     def get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
@@ -333,6 +335,7 @@ async def lifespan(mcp: MCPServer):
             "Do NOT use against production data."
         )
     logger.info("Starting GreptimeDB MCP server...")
+    await asyncio.to_thread(_withdraw_graph_tool_if_unusable, _state)
 
     try:
         yield _state
@@ -671,6 +674,203 @@ async def search_table_semantics(
     except Error as e:
         logger.error(f"Error searching table semantics for '{query}': {e}")
         return f"Error searching table semantics: {str(e)}"
+    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
+
+GRAPH_TOOL_NAME = "query_semantic_graph"
+
+
+def _withdraw_graph_tool_if_unusable(state: AppState) -> None:
+    """Stop advertising the graph tool when this server cannot serve it.
+
+    Registration happens at import, before any connection exists, so the
+    decision is made here instead. An inconclusive probe leaves the tool in
+    place: a database that was briefly unreachable at startup is not evidence
+    about the graph.
+    """
+    try:
+        with state.get_connection() as conn:
+            with conn.cursor() as cursor:
+                capability = state.semantic_graph.negotiate(cursor)
+    except Error as e:
+        logger.warning(f"Semantic graph probe failed, keeping the tool: {e}")
+        return
+
+    if capability.available:
+        logger.info("Semantic graph: available")
+        return
+    if not capability.conclusive:
+        logger.warning(f"Semantic graph probe inconclusive: {capability.detail}")
+        return
+
+    mcp.remove_tool(GRAPH_TOOL_NAME)
+    logger.info(
+        f"Semantic graph: {capability.status}, {GRAPH_TOOL_NAME} not offered "
+        f"({capability.detail})"
+    )
+
+
+@tool(name=GRAPH_TOOL_NAME)
+async def query_semantic_graph(
+    view: Annotated[
+        Literal["summary", "entities", "relationships"],
+        Field(
+            description=(
+                "summary: which entity and relationship types exist and what "
+                "they connect. entities: the nodes. relationships: the edges."
+            )
+        ),
+    ],
+    start_time: Annotated[
+        str,
+        Field(
+            description=(
+                "Inclusive start of the window, RFC3339, e.g. "
+                "2026-09-05T07:00:00Z. Without an offset it is read as UTC."
+            )
+        ),
+    ],
+    end_time: Annotated[
+        str, Field(description="Exclusive end of the window, RFC3339.")
+    ],
+    entity_type: Annotated[
+        str | None,
+        Field(description="entities only: service, k8s.pod, host, ..."),
+    ] = None,
+    entity_id: Annotated[
+        str | None,
+        Field(description="entities only: a canonical id this graph returned."),
+    ] = None,
+    scope: Annotated[
+        str | None,
+        Field(
+            description="entities only: the namespace or environment an id is scoped to."
+        ),
+    ] = None,
+    rel_type: Annotated[
+        str | None,
+        Field(
+            description=(
+                "relationships only: calls, runs_on, contains, part_of, uses, "
+                "invokes, depends_on, owns, or a custom declared value."
+            )
+        ),
+    ] = None,
+    src_type: Annotated[
+        str | None, Field(description="relationships only: source endpoint type.")
+    ] = None,
+    src_id: Annotated[
+        str | None,
+        Field(
+            description="relationships only: a canonical source id this graph returned."
+        ),
+    ] = None,
+    dst_type: Annotated[
+        str | None, Field(description="relationships only: destination endpoint type.")
+    ] = None,
+    dst_id: Annotated[
+        str | None,
+        Field(
+            description="relationships only: a canonical destination id this graph returned."
+        ),
+    ] = None,
+    provenance: Annotated[
+        str | None,
+        Field(
+            description=(
+                "relationships only: how the edge was obtained -- trace "
+                "(paired spans), attribute (identities on one row), declared, "
+                "or agent."
+            )
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Maximum rows to return.", ge=1, le=graph.MAX_LIMIT),
+    ] = graph.DEFAULT_LIMIT,
+) -> str:
+    """Query the semantic graph: which entities exist and which are related.
+
+    Start with view=summary. It returns each relationship type with the
+    endpoint type pairs it actually connects, so the shape of the graph is
+    known before any edge is read.
+
+    The window is required and half-open, [start_time, end_time), over
+    observed_at -- the 60-second bucket an observation was recorded in. Rows
+    are aggregated across the buckets in the window, so one edge is one row and
+    request, error and duration fields are summed over it. The result echoes
+    the window it used.
+
+    Ordering: only `calls` edges carry request, error and duration counts, so
+    an unfiltered result is ordered by relationship type and endpoint. Ordering
+    a mixed result by those counts would rank every other relationship type
+    below a null. Pass rel_type=calls to order by error and request count.
+
+    confidence is derivation certainty, not health. A paired or declared edge
+    is 1.0; an edge whose callee was named by a client-side peer attribute
+    rather than observed is 0.5, and that endpoint is a virtual node. Read
+    provenance for how a row was obtained rather than inferring it from the
+    number.
+
+    request_count counts calls whose client and server spans paired.
+    unmatched_count counts client spans with no matching server span, and is
+    not additive with it: a fall in request_count with unmatched_count present
+    means the callee stopped answering, while a fall in both means the caller
+    stopped asking. error_count aggregates span status verbatim, and some SDKs
+    mark a normal long-lived stream timeout as an error, so read the errors
+    before concluding from a rate.
+
+    A missing edge is not evidence that two entities are unrelated: it can also
+    mean the call was not instrumented, was sampled out, or fell outside this
+    window. Entities are not deduplicated across identity schemes, so one
+    process can appear under two ids if two sources named it differently --
+    compare their runs_on and part_of edges before treating them as two things.
+
+    entity_id_attrs names the attributes an id was assembled from and
+    source_tables names the telemetry tables that witnessed it; query those for
+    the underlying rows. Identifiers from alerts and other tools are not graph
+    ids unless a query here returned that exact string.
+    """
+    state = get_state()
+    request = graph.GraphRequest.parse(
+        view,
+        start_time,
+        end_time,
+        limit,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        scope=scope,
+        rel_type=rel_type,
+        src_type=src_type,
+        src_id=src_id,
+        dst_type=dst_type,
+        dst_id=dst_id,
+        provenance=provenance,
+    )
+
+    def _sync_query():
+        with state.get_connection() as conn:
+            with conn.cursor() as cursor:
+                capability = state.semantic_graph.negotiate(cursor)
+                if not capability.available:
+                    return {
+                        "view": request.view,
+                        "status": "unavailable",
+                        "reason": capability.status,
+                        "error": capability.detail,
+                        "items": [],
+                    }
+                if request.view == "summary":
+                    return state.semantic_graph.summary(cursor, request.window)
+                if request.view == "entities":
+                    return state.semantic_graph.entities(cursor, request)
+                return state.semantic_graph.relationships(cursor, request)
+
+    try:
+        result = await asyncio.to_thread(_sync_query)
+    except Error as e:
+        logger.error(f"Error querying the semantic graph: {e}")
+        return f"Error querying the semantic graph: {str(e)}"
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
