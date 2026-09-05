@@ -42,6 +42,8 @@ class SeedData:
     base_ms: int
     hosts: tuple[str, ...]
     points_per_host: int
+    # False before GreptimeDB 1.3, which is where entity options were added.
+    entity_declared: bool = False
 
     @property
     def row_count(self) -> int:
@@ -75,11 +77,26 @@ def seed(db):
     for table in (METRICS_TABLE, CREDENTIALS_TABLE):
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
 
+    # The semantic options make the table visible to search_table_semantics.
+    # Entity declarations are added separately: the option key does not exist
+    # before GreptimeDB 1.3 and CREATE TABLE rejects it outright.
     cursor.execute(f"""CREATE TABLE {METRICS_TABLE} (
             ts TIMESTAMP TIME INDEX,
             host STRING PRIMARY KEY,
             cpu DOUBLE
+        ) WITH (
+            'greptime.semantic.signal_type' = 'metric',
+            'greptime.semantic.metric.type' = 'gauge',
+            'greptime.semantic.metric.unit' = 'percent'
         )""")
+    try:
+        cursor.execute(
+            f"ALTER TABLE {METRICS_TABLE} "
+            "SET 'greptime.semantic.entity.host.id' = 'host'"
+        )
+        entity_declared = True
+    except mysql.connector.Error:
+        entity_declared = False
     # `password` is a reserved word in GreptimeDB's parser, hence user_password.
     # Both column names still match the default masking patterns.
     cursor.execute(f"""CREATE TABLE {CREDENTIALS_TABLE} (
@@ -110,6 +127,7 @@ def seed(db):
         base_ms=base_ms,
         hosts=METRIC_HOSTS,
         points_per_host=METRIC_POINTS,
+        entity_declared=entity_declared,
     )
 
     for table in (METRICS_TABLE, CREDENTIALS_TABLE):

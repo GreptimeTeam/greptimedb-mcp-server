@@ -28,6 +28,8 @@ from greptimedb_mcp_server.server import (
 )
 from greptimedb_mcp_server.utils import templates_loader
 
+from conftest import SEMANTICS_VIEW_COLUMNS
+
 
 @pytest.fixture(autouse=True)
 def setup_state():
@@ -321,7 +323,9 @@ async def test_describe_table_non_object_semantic_options():
 
         def execute(self, query, args=None):
             self.query = query
-            if "information_schema.table_semantics" in query:
+            if query.startswith("DESC TABLE information_schema.table_semantics"):
+                self._results = [(name,) for name in SEMANTICS_VIEW_COLUMNS]
+            elif "information_schema.table_semantics" in query:
                 self._results = [
                     (
                         "greptime",
@@ -330,9 +334,11 @@ async def test_describe_table_non_object_semantic_options():
                         1,
                         "metric",
                         "opentelemetry",
+                        "1.0",
                         "",
                         "declared",
                         "[1, 2, 3]",
+                        None,
                     )
                 ]
             elif "information_schema.tables" in query:

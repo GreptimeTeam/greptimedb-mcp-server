@@ -8,6 +8,7 @@ import sys
 if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-http")):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+from greptimedb_mcp_server import semantics
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
 from greptimedb_mcp_server.utils import (
@@ -43,11 +44,9 @@ from mysql.connector import connect, Error
 from mysql.connector.pooling import MySQLConnectionPool
 
 # Constants
-RES_PREFIX = "greptime://"
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
 MAX_SAMPLE_LIMIT = 20
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -68,6 +67,9 @@ class AppState:
     allow_write: bool = False
     pool: MySQLConnectionPool | None = field(default=None)
     http_session: aiohttp.ClientSession | None = field(default=None)
+    table_semantics: semantics.SemanticsView = field(
+        default_factory=semantics.SemanticsView
+    )
 
     def get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
@@ -218,73 +220,6 @@ def _fetch_table_comment(cursor, table_schema: str, table_name: str) -> str | No
     return None
 
 
-def _fetch_table_semantics(cursor, table_schema: str, table_name: str) -> dict:
-    """Read the experimental table_semantics view, degrading if it is absent."""
-    try:
-        cursor.execute(
-            """
-            SELECT table_catalog, table_schema, table_name, table_id,
-                   signal_type, source, pipeline, metadata_quality,
-                   semantic_options
-            FROM information_schema.table_semantics
-            WHERE table_schema = %s AND table_name = %s
-            """,
-            (table_schema, table_name),
-        )
-        # fetchall() drains the unbuffered cursor before the next query runs;
-        # the WHERE clause matches at most one row.
-        rows = cursor.fetchall()
-        row = rows[0] if rows else None
-    except Error as e:
-        return {
-            "included": True,
-            "available": False,
-            "found": False,
-            "error": str(e),
-        }
-
-    if not row:
-        return {"included": True, "available": True, "found": False}
-
-    semantic_options = row[8]
-    options = {}
-    raw_options = None
-    parse_error = None
-    if semantic_options:
-        try:
-            parsed = json.loads(semantic_options)
-        except (TypeError, json.JSONDecodeError) as e:
-            raw_options = semantic_options
-            parse_error = str(e)
-        else:
-            # Guidance treats options as a key/value map; a non-object payload
-            # would crash _build_table_guidance, so keep it as raw instead.
-            if isinstance(parsed, dict):
-                options = parsed
-            else:
-                raw_options = semantic_options
-                parse_error = "semantic_options is not a JSON object"
-
-    result = {
-        "included": True,
-        "available": True,
-        "found": True,
-        "table_catalog": row[0],
-        "table_schema": row[1],
-        "table_name": row[2],
-        "table_id": row[3],
-        "signal_type": row[4],
-        "source": row[5],
-        "pipeline": row[6],
-        "metadata_quality": row[7],
-        "options": options,
-    }
-    if raw_options is not None:
-        result["raw_options"] = raw_options
-        result["options_parse_error"] = parse_error
-    return result
-
-
 def _fetch_table_samples(
     cursor, state, table_schema: str, table_name: str, schema: dict, sample_limit: int
 ) -> dict:
@@ -338,57 +273,9 @@ def _fetch_table_samples(
         }
 
 
-def _build_table_guidance(schema: dict, semantics: dict, samples: dict) -> list[str]:
-    """Derive query hints from signal type, metric kind, and sample ordering."""
-    guidance = []
-    if semantics.get("included") and not semantics.get("available", True):
-        guidance.append(
-            "Table semantic metadata is unavailable. The connected GreptimeDB "
-            "version may not support information_schema.table_semantics."
-        )
-    elif semantics.get("included") and not semantics.get("found"):
-        guidance.append(
-            "No table semantic metadata was found. Treat signal type and "
-            "query pattern as schema/sample-based inference."
-        )
-
-    signal_type = semantics.get("signal_type")
-    options = semantics.get("options") or {}
-    metric_type = options.get("metric.type")
-    metadata_quality = semantics.get("metadata_quality")
-
-    if signal_type == "metric":
-        if metric_type == "counter":
-            guidance.append(
-                "This table is a counter metric. Prefer rate or increase "
-                "queries for trend analysis."
-            )
-        elif metric_type == "gauge":
-            guidance.append(
-                "This table is a gauge metric. Prefer absolute value, avg, "
-                "min, max, or percentile analysis."
-            )
-        elif metric_type == "histogram":
-            guidance.append(
-                "This table is a histogram metric. Prefer bucket/count/sum "
-                "based percentile analysis."
-            )
-        if metadata_quality == "inferred":
-            guidance.append(
-                "Metric type was inferred from naming. Re-check the query "
-                "choice if the metric name is non-standard."
-            )
-    elif signal_type == "trace":
-        guidance.append(
-            "This table represents traces. Prefer latency, error span, and "
-            "service-level aggregation queries."
-        )
-    elif signal_type == "log":
-        guidance.append(
-            "This table represents logs. Prefer full-text search plus "
-            "severity, time, and service aggregations."
-        )
-
+def _build_table_guidance(schema: dict, profile: dict, samples: dict) -> list[str]:
+    """Combine semantic query hints with hints about the profile itself."""
+    guidance = semantics.guidance(profile)
     if samples.get("included") and samples.get("strategy") == "latest_by_time_index":
         guidance.append(
             f"Sample rows are ordered by time index {schema.get('time_index')} descending."
@@ -653,7 +540,22 @@ async def describe_table(
         f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)",
     ] = 5,
 ) -> str:
-    """Get a table profile: schema, semantic metadata, sample rows, and guidance."""
+    """Get a table profile: schema, semantic metadata, sample rows, and guidance.
+
+    Use it when deciding how to query an unfamiliar table. When the right table
+    is not known yet, search_table_semantics first; describing candidates one
+    by one is slower than querying the data.
+
+    The semantic profile says what the table means, not what its data says.
+    signal_type is metric, log, trace, or event; source and source_version name
+    the ingestion protocol; pipeline names the schema that shaped the rows;
+    semantic_options carries signal-specific facts such as metric type and
+    unit. metadata_quality describes how the metric type was obtained --
+    `declared` by the protocol or `inferred` from the name -- and says nothing
+    about telemetry quality. entity_declarations lists the entities the table
+    contributes to the semantic graph. A null or missing semantic field means
+    unknown, not the opposite fact.
+    """
     state = get_state()
     table = validate_table_name(table)
     sample_limit = max(0, min(sample_limit, MAX_SAMPLE_LIMIT))
@@ -682,8 +584,8 @@ async def describe_table(
                         default=str,
                     )
                 table_comment = _fetch_table_comment(cursor, table_schema, table_name)
-                semantics = (
-                    _fetch_table_semantics(cursor, table_schema, table_name)
+                profile = (
+                    state.table_semantics.fetch(cursor, table_schema, table_name)
                     if include_semantics
                     else {"included": False}
                 )
@@ -700,9 +602,9 @@ async def describe_table(
                     "table_name": table_name,
                     **({"table_comment": table_comment} if table_comment else {}),
                     "schema": schema,
-                    "semantics": semantics,
+                    "semantics": profile,
                     "samples": samples,
-                    "guidance": _build_table_guidance(schema, semantics, samples),
+                    "guidance": _build_table_guidance(schema, profile, samples),
                 }
                 return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
@@ -721,6 +623,55 @@ async def describe_table(
             indent=2,
             default=str,
         )
+
+
+@tool()
+async def search_table_semantics(
+    query: Annotated[
+        str,
+        "Telemetry concepts to search for, such as 'redis memory usage' or "
+        "'request latency'",
+    ],
+    signal_type: Annotated[
+        str | None,
+        f"Restrict results to one signal type: {', '.join(semantics.VALID_SIGNAL_TYPES)}",
+    ] = None,
+    limit: Annotated[
+        int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+    ] = semantics.MAX_SEARCH_LIMIT,
+) -> str:
+    """Find tables by observability concept when the right table name is unknown.
+
+    Searches table names, semantic options, and entity declarations, and ranks
+    tables by how many query terms they matched. Use it before describe_table
+    when the schema is wide or table names do not say what they hold.
+
+    It searches schema metadata only, never telemetry row values, so it can say
+    which table holds Redis memory usage but not which row belongs to
+    `Redis02`. Once it returns candidates, query their data or describe one of
+    them; do not describe every candidate in turn.
+
+    Only tables carrying a `greptime.semantic.*` option, or one a built-in
+    convention derives a declaration for, are visible here. A table absent from
+    the results may still exist and hold the data, so fall back to SHOW TABLES
+    rather than concluding it is not there.
+    """
+    state = get_state()
+    request = semantics.SearchRequest.parse(query, signal_type, limit)
+
+    def _sync_search():
+        with state.get_connection() as conn:
+            with conn.cursor() as cursor:
+                return state.table_semantics.search(
+                    cursor, state.db_config["database"], request
+                )
+
+    try:
+        result = await asyncio.to_thread(_sync_search)
+    except Error as e:
+        logger.error(f"Error searching table semantics for '{query}': {e}")
+        return f"Error searching table semantics: {str(e)}"
+    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
 @tool()
