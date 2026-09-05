@@ -1,5 +1,9 @@
 import pytest
 import json
+import logging
+from dataclasses import replace
+
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server import server
@@ -159,7 +163,7 @@ async def test_execute_sql_markdown_format():
 @pytest.mark.asyncio
 async def test_execute_sql_missing_query():
     """Test execute_sql with missing query parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await execute_sql(query="")
     assert "Query is required" in str(excinfo.value)
 
@@ -167,7 +171,7 @@ async def test_execute_sql_missing_query():
 @pytest.mark.asyncio
 async def test_execute_sql_invalid_format():
     """Test execute_sql with invalid format parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await execute_sql(query="SELECT 1", format="xml")
     assert "Invalid format" in str(excinfo.value)
 
@@ -430,7 +434,7 @@ async def test_describe_table_not_found():
 @pytest.mark.asyncio
 async def test_describe_table_invalid_name():
     """Test describe_table with invalid table name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await describe_table(table="123invalid")
     assert "Invalid table name" in str(excinfo.value)
 
@@ -438,7 +442,7 @@ async def test_describe_table_invalid_name():
 @pytest.mark.asyncio
 async def test_describe_table_missing_table():
     """Test describe_table with missing table parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await describe_table(table="")
     assert "Table name is required" in str(excinfo.value)
 
@@ -492,7 +496,7 @@ async def test_execute_tql_with_lookback():
 @pytest.mark.asyncio
 async def test_execute_tql_missing_params():
     """Test execute_tql with missing required parameters"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await execute_tql(query="rate(x[5m])", start="", end="", step="")
     assert "required" in str(excinfo.value)
 
@@ -500,7 +504,7 @@ async def test_execute_tql_missing_params():
 @pytest.mark.asyncio
 async def test_execute_tql_injection_blocked():
     """Test execute_tql blocks injection in parameters"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await execute_tql(
             query="rate(x[5m])",
             start="2024-01-01'; DROP TABLE users; --",
@@ -583,7 +587,7 @@ async def test_query_range_with_by():
 @pytest.mark.asyncio
 async def test_query_range_invalid_table():
     """Test query_range with invalid table name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(table="123-bad", select="ts, avg(cpu)", align="1m")
     assert "Invalid table name" in str(excinfo.value)
 
@@ -591,7 +595,7 @@ async def test_query_range_invalid_table():
 @pytest.mark.asyncio
 async def test_query_range_missing_params():
     """Test query_range with missing required parameters"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(table="metrics", select="", align="")
     assert "required" in str(excinfo.value)
 
@@ -599,7 +603,7 @@ async def test_query_range_missing_params():
 @pytest.mark.asyncio
 async def test_query_range_injection_blocked():
     """Test query_range blocks injection in where clause"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(
             table="metrics",
             select="ts, avg(cpu)",
@@ -612,7 +616,7 @@ async def test_query_range_injection_blocked():
 @pytest.mark.asyncio
 async def test_query_range_align_injection_blocked():
     """Test query_range blocks injection in align parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(
             table="metrics",
             select="ts, avg(cpu)",
@@ -624,7 +628,7 @@ async def test_query_range_align_injection_blocked():
 @pytest.mark.asyncio
 async def test_query_range_invalid_align():
     """Test query_range rejects invalid duration format"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(
             table="metrics",
             select="ts, avg(cpu)",
@@ -636,7 +640,7 @@ async def test_query_range_invalid_align():
 @pytest.mark.asyncio
 async def test_query_range_fill_injection_blocked():
     """Test query_range blocks injection in fill parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(
             table="metrics",
             select="ts, avg(cpu)",
@@ -684,7 +688,7 @@ async def test_explain_query_with_analyze():
 @pytest.mark.asyncio
 async def test_explain_query_missing_query():
     """Test explain_query with missing query parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await explain_query(query="")
     assert "query is required" in str(excinfo.value)
 
@@ -754,7 +758,7 @@ async def test_read_table_resource():
 @pytest.mark.asyncio
 async def test_read_table_resource_invalid_name():
     """Test read_table_resource with invalid table name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ResourceError) as excinfo:
         await read_table_resource(table="123invalid")
     assert "Invalid table name" in str(excinfo.value)
 
@@ -902,7 +906,7 @@ async def test_execute_tql_csv_format():
 @pytest.mark.asyncio
 async def test_execute_tql_invalid_format():
     """Test execute_tql with invalid format parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await execute_tql(
             query="rate(x[5m])",
             start="2024-01-01T00:00:00Z",
@@ -929,7 +933,7 @@ async def test_query_range_csv_format():
 @pytest.mark.asyncio
 async def test_query_range_invalid_format():
     """Test query_range with invalid format parameter"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await query_range(
             table="metrics",
             select="ts, avg(cpu)",
@@ -1000,7 +1004,7 @@ async def test_list_pipelines_with_name():
 @pytest.mark.asyncio
 async def test_create_pipeline_invalid_name():
     """Test create_pipeline with invalid name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await create_pipeline(name="123-invalid", pipeline="version: 2")
     assert "Invalid pipeline name" in str(excinfo.value)
 
@@ -1008,7 +1012,7 @@ async def test_create_pipeline_invalid_name():
 @pytest.mark.asyncio
 async def test_dryrun_pipeline_invalid_pipeline_name():
     """Test dryrun_pipeline with invalid pipeline name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await dryrun_pipeline(pipeline_name="123-invalid", data='{"message": "test"}')
     assert "Invalid pipeline name" in str(excinfo.value)
 
@@ -1039,7 +1043,7 @@ async def test_dryrun_pipeline_neither_pipeline_nor_name():
 @pytest.mark.asyncio
 async def test_delete_pipeline_invalid_name():
     """Test delete_pipeline with invalid name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await delete_pipeline(name="123-invalid", version="2024-01-01")
     assert "Invalid pipeline name" in str(excinfo.value)
 
@@ -1086,7 +1090,7 @@ def test_validate_dashboard_name_invalid():
 @pytest.mark.asyncio
 async def test_create_dashboard_invalid_name():
     """Test create_dashboard with invalid name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await create_dashboard(name="123.invalid", definition='{"kind": "Dashboard"}')
     assert "Invalid dashboard name" in str(excinfo.value)
 
@@ -1101,6 +1105,24 @@ async def test_create_dashboard_invalid_json():
 @pytest.mark.asyncio
 async def test_delete_dashboard_invalid_name():
     """Test delete_dashboard with invalid name"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ToolError) as excinfo:
         await delete_dashboard(name="123.invalid")
     assert "Invalid dashboard name" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_audit_uses_registered_tool_name(caplog):
+    """Audit records the name the client called, not the function's."""
+    server._config = replace(server._config, audit_enabled=True)
+
+    @server.tool(name="renamed_tool")
+    async def original_name() -> str:
+        return "ok"
+
+    try:
+        with caplog.at_level(logging.INFO, logger="greptimedb_mcp_server.audit"):
+            await original_name()
+    finally:
+        server.mcp.remove_tool("renamed_tool")
+
+    assert "[AUDIT] renamed_tool" in caplog.text

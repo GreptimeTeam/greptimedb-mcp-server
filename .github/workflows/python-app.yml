@@ -55,7 +55,7 @@ jobs:
         VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
     - name: Import smoke test
       run: |
-        /tmp/smoke/bin/python -c "from mcp.server.fastmcp import FastMCP; import greptimedb_mcp_server.server"
+        /tmp/smoke/bin/python -c "from mcp.server.mcpserver import MCPServer; import greptimedb_mcp_server.server"
         /tmp/smoke/bin/greptimedb-mcp-server --help
 
   # Uses `docker run` rather than `services:` because the image needs a
