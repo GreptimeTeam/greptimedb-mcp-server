@@ -8,6 +8,7 @@ import sys
 if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-http")):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+from greptimedb_mcp_server import semantics
 from greptimedb_mcp_server.config import Config
 from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
 from greptimedb_mcp_server.utils import (
@@ -47,73 +48,11 @@ RES_PREFIX = "greptime://"
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
 MAX_SAMPLE_LIMIT = 20
-MAX_SEARCH_LIMIT = 50
-# Rows read from the semantics view before ranking. Ranking needs the whole
-# candidate set, so this caps the read rather than the reported matches.
-SEARCH_SCAN_LIMIT = 1000
-MAX_SEARCH_TERMS = 10
-
-SEMANTICS_VIEW = "information_schema.table_semantics"
-SEMANTICS_COLUMNS = (
-    "table_catalog",
-    "table_schema",
-    "table_name",
-    "table_id",
-    "signal_type",
-    "source",
-    "source_version",
-    "pipeline",
-    "metadata_quality",
-    "semantic_options",
-    "entity_declarations",
-)
-# Columns the searchable text is assembled from, in match priority order.
-SEARCH_COLUMNS = ("table_name", "semantic_options", "entity_declarations")
-SEARCH_STOP_WORDS = frozenset(
-    {"and", "for", "from", "in", "of", "on", "or", "the", "to", "with"}
-)
-VALID_SIGNAL_TYPES = ("metric", "log", "trace", "event")
-
-# MySQL error numbers used to tell a missing view from a rejected one. Anything
-# else stays uncached, so a transient failure does not disable the feature for
-# the life of the process.
-ERRNO_TABLE_NOT_FOUND = 1146
-ERRNO_PERMISSION_DENIED = frozenset({1044, 1045, 1142, 1143, 1227})
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("greptimedb_mcp_server")
-
-
-@dataclass(frozen=True)
-class SemanticsCapability:
-    """What the connected GreptimeDB exposes of the table semantics view.
-
-    `columns` drives the SELECT list: a column absent from the view makes the
-    whole statement fail to plan, so the query is built from what is actually
-    there rather than from what this version of the server knows about.
-    """
-
-    status: str
-    columns: frozenset[str] = frozenset()
-    detail: str | None = None
-
-    @property
-    def available(self) -> bool:
-        return self.status == "available"
-
-    @property
-    def cacheable(self) -> bool:
-        """Whether the probe answered, as opposed to failing to run."""
-        return self.status in ("available", "unavailable", "permission_denied")
-
-    def has(self, column: str) -> bool:
-        return column in self.columns
-
-    def selectable(self, columns) -> list[str]:
-        return [column for column in columns if column in self.columns]
 
 
 @dataclass
@@ -129,7 +68,9 @@ class AppState:
     allow_write: bool = False
     pool: MySQLConnectionPool | None = field(default=None)
     http_session: aiohttp.ClientSession | None = field(default=None)
-    semantics_capability: SemanticsCapability | None = field(default=None)
+    table_semantics: semantics.SemanticsView = field(
+        default_factory=semantics.SemanticsView
+    )
 
     def get_connection(self):
         """Get a connection from the pool, creating pool if needed."""
@@ -280,128 +221,6 @@ def _fetch_table_comment(cursor, table_schema: str, table_name: str) -> str | No
     return None
 
 
-def _probe_table_semantics(cursor) -> SemanticsCapability:
-    """Read the semantics view's column set, classifying why it is unusable."""
-    try:
-        cursor.execute(f"DESC TABLE {SEMANTICS_VIEW}")
-        columns = frozenset(str(row[0]) for row in cursor.fetchall())
-    except Error as e:
-        errno = getattr(e, "errno", None)
-        if errno == ERRNO_TABLE_NOT_FOUND:
-            return SemanticsCapability("unavailable", detail=str(e))
-        if errno in ERRNO_PERMISSION_DENIED:
-            return SemanticsCapability("permission_denied", detail=str(e))
-        return SemanticsCapability("error", detail=str(e))
-    return SemanticsCapability("available", columns=columns)
-
-
-def _table_semantics_capability(state: AppState, cursor) -> SemanticsCapability:
-    """Probe the semantics view once per process and reuse the answer.
-
-    Racing callers may both probe; the result is identical, so the extra DESC
-    is cheaper than serializing every describe_table on a lock.
-    """
-    cached = state.semantics_capability
-    if cached is not None:
-        return cached
-    capability = _probe_table_semantics(cursor)
-    if capability.cacheable:
-        state.semantics_capability = capability
-    return capability
-
-
-def _parse_semantic_json(value, column: str, expected: type):
-    """Decode a semantics JSON column, keeping the raw text when it is not usable.
-
-    Returns (parsed, raw, error): callers surface raw/error instead of dropping
-    a payload whose shape this version does not expect.
-    """
-    if not value:
-        return None, None, None
-    try:
-        parsed = json.loads(value)
-    except (TypeError, json.JSONDecodeError) as e:
-        return None, value, str(e)
-    if not isinstance(parsed, expected):
-        shape = "object" if expected is dict else "array"
-        return None, value, f"{column} is not a JSON {shape}"
-    return parsed, None, None
-
-
-def _fetch_table_semantics(
-    state: AppState, cursor, table_schema: str, table_name: str
-) -> dict:
-    """Read the table_semantics view, degrading if it or a column is absent."""
-    capability = _table_semantics_capability(state, cursor)
-    if not capability.available:
-        return {
-            "included": True,
-            "available": False,
-            "found": False,
-            "reason": capability.status,
-            "error": capability.detail,
-        }
-
-    columns = capability.selectable(SEMANTICS_COLUMNS)
-    missing = [c for c in SEMANTICS_COLUMNS if c not in capability.columns]
-    try:
-        cursor.execute(
-            f"SELECT {', '.join(columns)} FROM {SEMANTICS_VIEW} "
-            "WHERE table_schema = %s AND table_name = %s",
-            (table_schema, table_name),
-        )
-        # fetchall() drains the unbuffered cursor before the next query runs;
-        # the WHERE clause matches at most one row.
-        rows = cursor.fetchall()
-        row = rows[0] if rows else None
-    except Error as e:
-        return {
-            "included": True,
-            "available": False,
-            "found": False,
-            "reason": "error",
-            "error": str(e),
-        }
-
-    result = {"included": True, "available": True, "found": row is not None}
-    if missing:
-        result["missing_columns"] = missing
-    if row is None:
-        return result
-
-    values = dict(zip(columns, row))
-    options, raw_options, options_error = _parse_semantic_json(
-        values.get("semantic_options"), "semantic_options", dict
-    )
-    declarations, raw_declarations, declarations_error = _parse_semantic_json(
-        values.get("entity_declarations"), "entity_declarations", list
-    )
-
-    result.update(
-        {
-            "table_catalog": values.get("table_catalog"),
-            "table_schema": values.get("table_schema"),
-            "table_name": values.get("table_name"),
-            "table_id": values.get("table_id"),
-            "signal_type": values.get("signal_type"),
-            "source": values.get("source"),
-            "source_version": values.get("source_version"),
-            "pipeline": values.get("pipeline"),
-            "metadata_quality": values.get("metadata_quality"),
-            "options": options or {},
-        }
-    )
-    if raw_options is not None:
-        result["raw_options"] = raw_options
-        result["options_parse_error"] = options_error
-    if declarations is not None:
-        result["entity_declarations"] = declarations
-    if raw_declarations is not None:
-        result["raw_entity_declarations"] = raw_declarations
-        result["entity_declarations_parse_error"] = declarations_error
-    return result
-
-
 def _fetch_table_samples(
     cursor, state, table_schema: str, table_name: str, schema: dict, sample_limit: int
 ) -> dict:
@@ -455,152 +274,9 @@ def _fetch_table_samples(
         }
 
 
-def _search_terms(query: str) -> list[str]:
-    """Split a concept query into distinct searchable terms.
-
-    Underscores become separators so that a query for `used memory` still
-    matches `redis___used_memory_`.
-    """
-    normalized = query.lower().replace("_", " ")
-    terms = (
-        term
-        for term in re.findall(r"[a-z0-9.:-]+", normalized)
-        if len(term) > 1 and term not in SEARCH_STOP_WORDS
-    )
-    return list(dict.fromkeys(terms))[:MAX_SEARCH_TERMS]
-
-
-def _escape_like(term: str) -> str:
-    """Neutralize LIKE wildcards in a user-supplied term.
-
-    GreptimeDB rejects the ESCAPE clause but treats a backslash as the escape
-    character, so the term is escaped for the default and bound as a parameter.
-    """
-    for char in ("\\", "%", "_"):
-        term = term.replace(char, "\\" + char)
-    return term
-
-
-def _matched_terms(terms: list[str], searchable: str) -> list[str]:
-    """Return the terms a candidate matched, for ranking.
-
-    Terms of one or two characters must match a whole token: a substring test
-    would let `geo` match `range of`.
-    """
-    normalized = searchable.lower()
-    tokens = set(re.findall(r"[a-z0-9]+", normalized))
-    return [
-        term
-        for term in terms
-        if term in tokens or (len(term) > 2 and term in normalized)
-    ]
-
-
-def _entity_declaration_guidance(semantics: dict) -> list[str]:
-    """Explain what the table contributes to the semantic graph, if anything."""
-    if not semantics.get("included") or not semantics.get("found"):
-        return []
-
-    if "entity_declarations" in (semantics.get("missing_columns") or []):
-        return [
-            "This GreptimeDB version does not expose entity_declarations, so "
-            "the entities this table contributes to the semantic graph cannot "
-            "be read here. Absence is a version limit, not evidence that the "
-            "table declares none."
-        ]
-
-    declarations = semantics.get("entity_declarations")
-    if not declarations:
-        return [
-            "This table declares no semantic entities, so it contributes no "
-            "nodes to the semantic graph. Its rows are still queryable."
-        ]
-
-    types = sorted(
-        {
-            str(item.get("entity_type"))
-            for item in declarations
-            if isinstance(item, dict) and item.get("entity_type")
-        }
-    )
-    guidance = []
-    if types:
-        guidance.append(
-            f"This table contributes these semantic entities: {', '.join(types)}. "
-            "Each declaration's id lists the identifying columns, in order."
-        )
-    # The declared/convention split and a dropped id_qualifier are the only
-    # observable causes of one process appearing under two entity ids.
-    guidance.append(
-        "Check origin and id_qualifier on each declaration before treating two "
-        "ids as two things. An explicit declaration replaces the built-in "
-        "convention for that entity type outright, so one that omits "
-        "id_qualifier silently drops the qualifier the convention would have "
-        "applied, and the same process can then appear under two ids."
-    )
-    return guidance
-
-
-def _build_table_guidance(schema: dict, semantics: dict, samples: dict) -> list[str]:
-    """Derive query hints from signal type, metric kind, and sample ordering."""
-    guidance = []
-    if semantics.get("included") and not semantics.get("available", True):
-        if semantics.get("reason") == "permission_denied":
-            guidance.append(
-                f"{SEMANTICS_VIEW} exists but this account cannot read it. "
-                "Signal type and query pattern below are schema/sample-based "
-                "inference."
-            )
-        else:
-            guidance.append(
-                "Table semantic metadata is unavailable. The connected "
-                f"GreptimeDB version may not support {SEMANTICS_VIEW}."
-            )
-    elif semantics.get("included") and not semantics.get("found"):
-        guidance.append(
-            "No table semantic metadata was found. Treat signal type and "
-            "query pattern as schema/sample-based inference."
-        )
-
-    guidance.extend(_entity_declaration_guidance(semantics))
-
-    signal_type = semantics.get("signal_type")
-    options = semantics.get("options") or {}
-    metric_type = options.get("metric.type")
-    metadata_quality = semantics.get("metadata_quality")
-
-    if signal_type == "metric":
-        if metric_type == "counter":
-            guidance.append(
-                "This table is a counter metric. Prefer rate or increase "
-                "queries for trend analysis."
-            )
-        elif metric_type == "gauge":
-            guidance.append(
-                "This table is a gauge metric. Prefer absolute value, avg, "
-                "min, max, or percentile analysis."
-            )
-        elif metric_type == "histogram":
-            guidance.append(
-                "This table is a histogram metric. Prefer bucket/count/sum "
-                "based percentile analysis."
-            )
-        if metadata_quality == "inferred":
-            guidance.append(
-                "Metric type was inferred from naming. Re-check the query "
-                "choice if the metric name is non-standard."
-            )
-    elif signal_type == "trace":
-        guidance.append(
-            "This table represents traces. Prefer latency, error span, and "
-            "service-level aggregation queries."
-        )
-    elif signal_type == "log":
-        guidance.append(
-            "This table represents logs. Prefer full-text search plus "
-            "severity, time, and service aggregations."
-        )
-
+def _build_table_guidance(schema: dict, profile: dict, samples: dict) -> list[str]:
+    """Combine semantic query hints with hints about the profile itself."""
+    guidance = semantics.guidance(profile)
     if samples.get("included") and samples.get("strategy") == "latest_by_time_index":
         guidance.append(
             f"Sample rows are ordered by time index {schema.get('time_index')} descending."
@@ -909,8 +585,8 @@ async def describe_table(
                         default=str,
                     )
                 table_comment = _fetch_table_comment(cursor, table_schema, table_name)
-                semantics = (
-                    _fetch_table_semantics(state, cursor, table_schema, table_name)
+                profile = (
+                    state.table_semantics.fetch(cursor, table_schema, table_name)
                     if include_semantics
                     else {"included": False}
                 )
@@ -927,9 +603,9 @@ async def describe_table(
                     "table_name": table_name,
                     **({"table_comment": table_comment} if table_comment else {}),
                     "schema": schema,
-                    "semantics": semantics,
+                    "semantics": profile,
                     "samples": samples,
-                    "guidance": _build_table_guidance(schema, semantics, samples),
+                    "guidance": _build_table_guidance(schema, profile, samples),
                 }
                 return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
@@ -950,90 +626,6 @@ async def describe_table(
         )
 
 
-def _search_table_semantics_sql(
-    capability: SemanticsCapability,
-    terms: list[str],
-    table_schema: str,
-    signal_type: str | None,
-) -> tuple[str, list]:
-    """Build the candidate query and its bound parameters."""
-    columns = capability.selectable(SEMANTICS_COLUMNS)
-    searchable = capability.selectable(SEARCH_COLUMNS)
-
-    predicates = ["table_schema = %s"]
-    params: list = [table_schema]
-    if signal_type:
-        predicates.append("signal_type = %s")
-        params.append(signal_type)
-
-    for term in terms:
-        pattern = f"%{_escape_like(term)}%"
-        # COALESCE keeps a NULL column from making the whole OR group NULL,
-        # which would drop rows that matched on another column.
-        clauses = [f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable]
-        predicates.append(f"({' OR '.join(clauses)})")
-        params.extend([pattern] * len(clauses))
-
-    sql = (
-        f"SELECT {', '.join(columns)} FROM {SEMANTICS_VIEW} "
-        f"WHERE {' AND '.join(predicates)} "
-        f"ORDER BY table_name LIMIT {SEARCH_SCAN_LIMIT}"
-    )
-    return sql, params
-
-
-def _rank_search_candidates(
-    columns: list[str], rows: list, terms: list[str]
-) -> list[dict]:
-    """Score rows by matched terms, dropping rows no term actually matched."""
-    candidates = []
-    for row in rows:
-        values = dict(zip(columns, row))
-        options, raw_options, _ = _parse_semantic_json(
-            values.get("semantic_options"), "semantic_options", dict
-        )
-        declarations, raw_declarations, _ = _parse_semantic_json(
-            values.get("entity_declarations"), "entity_declarations", list
-        )
-        searchable = " ".join(
-            str(part)
-            for part in (
-                values.get("table_name"),
-                values.get("semantic_options"),
-                values.get("entity_declarations"),
-            )
-            if part
-        )
-        matched = _matched_terms(terms, searchable)
-        if not matched:
-            # The SQL LIKE matched a substring the ranking rules reject, such
-            # as a short term inside a longer word.
-            continue
-        candidate = {
-            "table": values.get("table_name"),
-            "signal_type": values.get("signal_type"),
-            "source": values.get("source"),
-            "source_version": values.get("source_version"),
-            "pipeline": values.get("pipeline"),
-            "metadata_quality": values.get("metadata_quality"),
-            "matched_terms": matched,
-        }
-        if options:
-            candidate["semantic_options"] = options
-        elif raw_options:
-            candidate["semantic_options"] = raw_options
-        if declarations:
-            candidate["entity_declarations"] = declarations
-        elif raw_declarations:
-            candidate["entity_declarations"] = raw_declarations
-        candidates.append(candidate)
-
-    candidates.sort(
-        key=lambda item: (-len(item["matched_terms"]), str(item["table"]).lower())
-    )
-    return candidates
-
-
 @tool()
 async def search_table_semantics(
     query: Annotated[
@@ -1043,11 +635,11 @@ async def search_table_semantics(
     ],
     signal_type: Annotated[
         str | None,
-        f"Restrict results to one signal type: {', '.join(VALID_SIGNAL_TYPES)}",
+        f"Restrict results to one signal type: {', '.join(semantics.VALID_SIGNAL_TYPES)}",
     ] = None,
     limit: Annotated[
-        int, f"Maximum tables to return (1-{MAX_SEARCH_LIMIT}, default: 50)"
-    ] = MAX_SEARCH_LIMIT,
+        int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+    ] = semantics.MAX_SEARCH_LIMIT,
 ) -> str:
     """Find tables by observability concept when the right table name is unknown.
 
@@ -1066,56 +658,14 @@ async def search_table_semantics(
     rather than concluding it is not there.
     """
     state = get_state()
-    if not query or not query.strip():
-        raise ValueError("query is required")
-    if signal_type is not None and signal_type not in VALID_SIGNAL_TYPES:
-        raise ValueError(
-            f"Invalid signal_type: {signal_type}. "
-            f"Must be one of: {', '.join(VALID_SIGNAL_TYPES)}"
-        )
-    terms = _search_terms(query)
-    if not terms:
-        raise ValueError(
-            "query must contain at least one term of two or more characters"
-        )
-    limit = max(1, min(limit, MAX_SEARCH_LIMIT))
-    table_schema = state.db_config["database"]
+    request = semantics.SearchRequest.parse(query, signal_type, limit)
 
     def _sync_search():
         with state.get_connection() as conn:
             with conn.cursor() as cursor:
-                capability = _table_semantics_capability(state, cursor)
-                if not capability.available:
-                    return {
-                        "query": query,
-                        "terms": terms,
-                        "available": False,
-                        "reason": capability.status,
-                        "error": capability.detail,
-                        "matches": [],
-                    }
-                sql, params = _search_table_semantics_sql(
-                    capability, terms, table_schema, signal_type
+                return state.table_semantics.search(
+                    cursor, state.db_config["database"], request
                 )
-                cursor.execute(sql, params)
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                candidates = _rank_search_candidates(columns, rows, terms)
-                result = {
-                    "query": query,
-                    "terms": terms,
-                    "available": True,
-                    "signal_type": signal_type,
-                    "searched_columns": capability.selectable(SEARCH_COLUMNS),
-                    "matched_table_count": len(candidates),
-                    "matches": candidates[:limit],
-                    "truncated": len(rows) >= SEARCH_SCAN_LIMIT
-                    or len(candidates) > limit,
-                }
-                missing = [c for c in SEARCH_COLUMNS if not capability.has(c)]
-                if missing:
-                    result["unsearched_columns"] = missing
-                return result
 
     try:
         result = await asyncio.to_thread(_sync_search)
