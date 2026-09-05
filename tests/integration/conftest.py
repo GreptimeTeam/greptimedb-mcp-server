@@ -28,6 +28,16 @@ DATABASE = "public"
 METRICS_TABLE = "it_cpu_metrics"
 CREDENTIALS_TABLE = "it_credentials"
 
+DECLARED_EDGES_TABLE = "greptime_private.semantic_relationships_declared"
+# Declared edges are inserted directly, so the graph has both a RED-bearing
+# relationship type and one without needing OTLP traces to pair up.
+GRAPH_EDGES = (
+    ("service", "it-frontend", "service", "it-checkout", "calls", 100, 7),
+    ("service", "it-checkout", "service", "it-payment", "calls", 100, 45),
+    ("service", "it-checkout", "k8s.pod", "it-pod-a", "runs_on", None, None),
+    ("k8s.pod", "it-pod-a", "k8s.node", "it-node-1", "runs_on", None, None),
+)
+
 METRIC_HOSTS = ("host-a", "host-b")
 METRIC_POINTS = 12
 METRIC_INTERVAL_MS = 10_000
@@ -44,6 +54,7 @@ class SeedData:
     points_per_host: int
     # False before GreptimeDB 1.3, which is where entity options were added.
     entity_declared: bool = False
+    graph_seeded: bool = False
 
     @property
     def row_count(self) -> int:
@@ -106,6 +117,8 @@ def seed(db):
             api_key STRING
         )""")
 
+    graph_seeded = _seed_declared_edges(cursor)
+
     base_ms = int(time.time() * 1000)
     metric_rows = [
         (base_ms - i * METRIC_INTERVAL_MS, host, 50.0 + i)
@@ -128,11 +141,46 @@ def seed(db):
         hosts=METRIC_HOSTS,
         points_per_host=METRIC_POINTS,
         entity_declared=entity_declared,
+        graph_seeded=graph_seeded,
     )
 
     for table in (METRICS_TABLE, CREDENTIALS_TABLE):
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    if graph_seeded:
+        # Delete only the seeded edges: the table is shared and this suite did
+        # not create it.
+        for edge in GRAPH_EDGES:
+            cursor.execute(
+                f"DELETE FROM {DECLARED_EDGES_TABLE} WHERE src_id = %s AND dst_id = %s",
+                (edge[1], edge[3]),
+            )
     db.commit()
+
+
+def _seed_declared_edges(cursor) -> bool:
+    """Insert declared edges, reporting False when the graph does not exist."""
+    columns = (
+        "observed_at, src_type, src_id, dst_type, dst_id, rel_type, provenance, "
+        "scope, generation_id, confidence, request_count, error_count"
+    )
+    try:
+        for (
+            src_type,
+            src_id,
+            dst_type,
+            dst_id,
+            rel_type,
+            requests,
+            errors,
+        ) in GRAPH_EDGES:
+            cursor.execute(
+                f"INSERT INTO {DECLARED_EDGES_TABLE} ({columns}) VALUES "
+                "(now(), %s, %s, %s, %s, %s, 'declared', '', '', 1.0, %s, %s)",
+                (src_type, src_id, dst_type, dst_id, rel_type, requests, errors),
+            )
+    except mysql.connector.Error:
+        return False
+    return True
 
 
 def server_argv(**overrides) -> list[str]:
