@@ -19,32 +19,51 @@ from mysql.connector import Error
 ENTITIES_VIEW = "greptime_private.semantic_entities"
 RELATIONSHIPS_VIEW = "greptime_private.semantic_relationships"
 
-# Reading a column the view lacks fails the statement to plan, so a view
-# missing any of these cannot be queried the way this module queries it.
-ENTITY_REQUIRED_COLUMNS = frozenset(
-    {"observed_at", "entity_type", "entity_id", "entity_id_attrs", "source_tables"}
+# Read verbatim, so a view missing any of them cannot be queried the way this
+# module queries it. These are the GreptimeDB 1.3 columns; the graph does not
+# exist before that, so there is no older shape to degrade to.
+ENTITY_COLUMNS = (
+    "entity_type",
+    "entity_id",
+    "entity_id_attrs",
+    "scope",
+    "descriptive",
+    "source_tables",
 )
-RELATIONSHIP_REQUIRED_COLUMNS = frozenset(
-    {
-        "observed_at",
-        "src_type",
-        "src_id",
-        "dst_type",
-        "dst_id",
-        "rel_type",
-        "provenance",
-        "confidence",
-    }
-)
+ENTITY_REQUIRED_COLUMNS = frozenset({"observed_at", "fresh_until", *ENTITY_COLUMNS})
 
-# Summed across the window when present. A view without them still works; the
-# fields are simply absent from the result.
+RELATIONSHIP_IDENTITY_COLUMNS = (
+    "src_type",
+    "src_id",
+    "dst_type",
+    "dst_id",
+    "rel_type",
+    "provenance",
+)
+# Summed over the buckets in the window.
 RED_COLUMNS = (
     "request_count",
     "unmatched_count",
     "error_count",
     "duration_sum",
     "duration_count",
+)
+RELATIONSHIP_REQUIRED_COLUMNS = frozenset(
+    {
+        "observed_at",
+        "fresh_until",
+        "confidence",
+        "duration_max",
+        *RELATIONSHIP_IDENTITY_COLUMNS,
+        *RED_COLUMNS,
+    }
+)
+
+# Columns holding JSON. Everything else is returned verbatim: decoding an
+# identifier would turn "123" into a number and "null" into nothing, and the
+# caller needs the exact string back to query with it.
+JSON_COLUMNS = frozenset(
+    {"entity_id_attrs", "descriptive", "source_tables", "attributes"}
 )
 
 VIEWS = ("summary", "entities", "relationships")
@@ -66,7 +85,6 @@ MAX_LIMIT = 500
 DEFAULT_LIMIT = 100
 
 OBSERVATION_BUCKET_SECONDS = 60
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
 ERRNO_TABLE_NOT_FOUND = 1146
 ERRNO_PERMISSION_DENIED = frozenset({1044, 1045, 1142, 1143, 1227})
@@ -100,12 +118,6 @@ class GraphCapability:
             "incompatible_schema",
         )
 
-    def red_columns(self) -> list[str]:
-        return [c for c in RED_COLUMNS if c in self.relationship_columns]
-
-    def has_duration_max(self) -> bool:
-        return "duration_max" in self.relationship_columns
-
 
 @dataclass(frozen=True)
 class TimeWindow:
@@ -124,10 +136,12 @@ class TimeWindow:
 
     @property
     def params(self) -> list[str]:
-        return [
-            self.start.strftime(TIMESTAMP_FORMAT),
-            self.end.strftime(TIMESTAMP_FORMAT),
-        ]
+        """Bind values that carry their offset.
+
+        A literal without one is read in the session time zone, so the same
+        window would select different rows depending on GREPTIMEDB_TIMEZONE.
+        """
+        return [self.start.isoformat(), self.end.isoformat()]
 
     def describe(self) -> dict:
         return {
@@ -203,8 +217,8 @@ class GraphRequest:
         return any(name in ID_FILTERS for name in self.filters)
 
 
-def _decode_json(value):
-    if not isinstance(value, str) or not value:
+def _decode_json(name: str, value):
+    if name not in JSON_COLUMNS or not isinstance(value, str) or not value:
         return value
     try:
         return json.loads(value)
@@ -213,7 +227,7 @@ def _decode_json(value):
 
 
 def _row_dict(columns: list[str], row) -> dict:
-    return {name: _decode_json(value) for name, value in zip(columns, row)}
+    return {name: _decode_json(name, value) for name, value in zip(columns, row)}
 
 
 def _filter_sql(filters: dict) -> tuple[list[str], list]:
@@ -227,6 +241,12 @@ def _no_match_guidance(request: GraphRequest) -> dict:
     An unfiltered read of a large graph is the failure this tool exists to
     avoid, so the suggestion drops the identifier and keeps the type filters.
     """
+    # The window is a required argument, so a next_query without it would not
+    # run.
+    window = {
+        "start_time": request.window.start.isoformat(),
+        "end_time": request.window.end.isoformat(),
+    }
     if request.names_an_id:
         kept = {k: v for k, v in request.filters.items() if k not in ID_FILTERS}
         return {
@@ -234,14 +254,14 @@ def _no_match_guidance(request: GraphRequest) -> dict:
                 "The supplied identifier may not be a canonical graph entity ID. "
                 "IDs from alerts and telemetry are not interchangeable with them."
             ),
-            "next_query": {"view": request.view, **kept},
+            "next_query": {"view": request.view, **kept, **window},
         }
     return {
         "reason": (
             "No rows matched in this window. The relationship may not have been "
             "witnessed, or the window may not cover it."
         ),
-        "next_query": {"view": "summary"},
+        "next_query": {"view": "summary", **window},
     }
 
 
@@ -300,21 +320,17 @@ class GraphView:
             "ORDER BY rel_type, src_type, dst_type",
             window.params,
         )
+        # Endpoint types are reported as pairs. Reducing them to a set of
+        # sources and a set of destinations would imply combinations that do
+        # not exist: service->pod and pod->node would read as service->node.
         grouped: dict[str, dict] = {}
         for rel_type, src_type, dst_type, count in cursor.fetchall():
             entry = grouped.setdefault(
-                rel_type,
-                {
-                    "type": rel_type,
-                    "source_types": [],
-                    "destination_types": [],
-                    "count": 0,
-                },
+                rel_type, {"type": rel_type, "endpoints": [], "count": 0}
             )
-            if src_type not in entry["source_types"]:
-                entry["source_types"].append(src_type)
-            if dst_type not in entry["destination_types"]:
-                entry["destination_types"].append(dst_type)
+            entry["endpoints"].append(
+                {"source": src_type, "destination": dst_type, "count": int(count)}
+            )
             entry["count"] += int(count)
         return list(grouped.values())
 
@@ -322,11 +338,15 @@ class GraphView:
         """List distinct entities observed in the window."""
         predicates, params = _filter_sql(request.filters)
         where = " AND ".join(["observed_at >= %s", "observed_at < %s", *predicates])
-        identity = "entity_type, entity_id, entity_id_attrs, scope, source_tables"
+        # descriptive is grouped rather than aggregated: MAX over a JSON
+        # column would silently return one bucket's value for an entity whose
+        # attributes changed inside the window.
+        identity = ", ".join(ENTITY_COLUMNS)
         cursor.execute(
             f"SELECT {identity},"
             "        MIN(observed_at) AS first_seen,"
-            "        MAX(observed_at) AS last_seen"
+            "        MAX(observed_at) AS last_seen,"
+            "        MAX(fresh_until) AS fresh_until"
             f" FROM {ENTITIES_VIEW} WHERE {where}"
             f" GROUP BY {identity}"
             " ORDER BY entity_type, entity_id"
@@ -336,20 +356,24 @@ class GraphView:
         return self._envelope(cursor, request)
 
     def relationships(self, cursor, request: GraphRequest) -> dict:
-        """List edges observed in the window, aggregated across buckets."""
-        capability = self.capability
-        red = capability.red_columns() if capability else list(RED_COLUMNS)
-        aggregates = [f"SUM({column}) AS {column}" for column in red]
-        if capability is None or capability.has_duration_max():
-            aggregates.append("MAX(duration_max) AS duration_max")
+        """List edges observed in the window, aggregated across buckets.
+
+        `attributes` is left out: it varies per observation, so grouping by it
+        would split one edge into several rows and break the RED totals, while
+        aggregating it would present one bucket's value as the edge's. Read it
+        per observation with execute_sql.
+        """
+        aggregates = [f"SUM({column}) AS {column}" for column in RED_COLUMNS]
+        aggregates.append("MAX(duration_max) AS duration_max")
 
         predicates, params = _filter_sql(request.filters)
         where = " AND ".join(["observed_at >= %s", "observed_at < %s", *predicates])
-        identity = "src_type, src_id, dst_type, dst_id, rel_type, provenance"
+        identity = ", ".join(RELATIONSHIP_IDENTITY_COLUMNS)
         cursor.execute(
             f"SELECT {identity}, MAX(confidence) AS confidence, "
             + ", ".join(aggregates)
             + ", MIN(observed_at) AS first_seen, MAX(observed_at) AS last_seen"
+            + ", MAX(fresh_until) AS fresh_until"
             f" FROM {RELATIONSHIPS_VIEW} WHERE {where}"
             f" GROUP BY {identity}"
             f" ORDER BY {_relationship_order(request)}"

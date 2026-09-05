@@ -33,10 +33,11 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 import aiohttp
+from pydantic import Field
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -712,61 +713,123 @@ def _withdraw_graph_tool_if_unusable(state: AppState) -> None:
 @tool(name=GRAPH_TOOL_NAME)
 async def query_semantic_graph(
     view: Annotated[
-        str,
-        "summary (what the graph contains), entities (nodes), or relationships "
-        "(edges)",
+        Literal["summary", "entities", "relationships"],
+        Field(
+            description=(
+                "summary: which entity and relationship types exist and what "
+                "they connect. entities: the nodes. relationships: the edges."
+            )
+        ),
     ],
     start_time: Annotated[
-        str, "Inclusive RFC3339 start of the window, e.g. 2026-09-05T07:00:00Z"
+        str,
+        Field(
+            description=(
+                "Inclusive start of the window, RFC3339, e.g. "
+                "2026-09-05T07:00:00Z. Without an offset it is read as UTC."
+            )
+        ),
     ],
-    end_time: Annotated[str, "Exclusive RFC3339 end of the window"],
-    entity_type: Annotated[str | None, "entities: filter by entity type"] = None,
-    entity_id: Annotated[str | None, "entities: filter by canonical entity id"] = None,
-    scope: Annotated[str | None, "entities: filter by namespace or environment"] = None,
-    rel_type: Annotated[
-        str | None, "relationships: calls, runs_on, part_of, contains, uses, ..."
+    end_time: Annotated[
+        str, Field(description="Exclusive end of the window, RFC3339.")
+    ],
+    entity_type: Annotated[
+        str | None,
+        Field(description="entities only: service, k8s.pod, host, ..."),
     ] = None,
-    src_type: Annotated[str | None, "relationships: source endpoint type"] = None,
-    src_id: Annotated[str | None, "relationships: source endpoint id"] = None,
-    dst_type: Annotated[str | None, "relationships: destination endpoint type"] = None,
-    dst_id: Annotated[str | None, "relationships: destination endpoint id"] = None,
+    entity_id: Annotated[
+        str | None,
+        Field(description="entities only: a canonical id this graph returned."),
+    ] = None,
+    scope: Annotated[
+        str | None,
+        Field(
+            description="entities only: the namespace or environment an id is scoped to."
+        ),
+    ] = None,
+    rel_type: Annotated[
+        str | None,
+        Field(
+            description=(
+                "relationships only: calls, runs_on, contains, part_of, uses, "
+                "invokes, depends_on, owns, or a custom declared value."
+            )
+        ),
+    ] = None,
+    src_type: Annotated[
+        str | None, Field(description="relationships only: source endpoint type.")
+    ] = None,
+    src_id: Annotated[
+        str | None,
+        Field(
+            description="relationships only: a canonical source id this graph returned."
+        ),
+    ] = None,
+    dst_type: Annotated[
+        str | None, Field(description="relationships only: destination endpoint type.")
+    ] = None,
+    dst_id: Annotated[
+        str | None,
+        Field(
+            description="relationships only: a canonical destination id this graph returned."
+        ),
+    ] = None,
     provenance: Annotated[
-        str | None, "relationships: trace, attribute, declared, or agent"
+        str | None,
+        Field(
+            description=(
+                "relationships only: how the edge was obtained -- trace "
+                "(paired spans), attribute (identities on one row), declared, "
+                "or agent."
+            )
+        ),
     ] = None,
     limit: Annotated[
-        int, f"Maximum rows to return (1-{graph.MAX_LIMIT}, default: 100)"
+        int,
+        Field(description="Maximum rows to return.", ge=1, le=graph.MAX_LIMIT),
     ] = graph.DEFAULT_LIMIT,
 ) -> str:
     """Query the semantic graph: which entities exist and which are related.
 
-    Start with view=summary. It returns the entity types, the relationship
-    types, and the endpoint types each relationship connects, so the shape of
-    the graph is known before any edge is read.
+    Start with view=summary. It returns each relationship type with the
+    endpoint type pairs it actually connects, so the shape of the graph is
+    known before any edge is read.
 
-    The window is required and is half-open, [start_time, end_time), over
-    observed_at -- the 60-second bucket an observation was recorded in, taken
-    from the client side of a call. Rows are aggregated across the buckets in
-    the window, so one edge is one row and RED fields are summed over the
-    window. The result echoes the window it used.
+    The window is required and half-open, [start_time, end_time), over
+    observed_at -- the 60-second bucket an observation was recorded in. Rows
+    are aggregated across the buckets in the window, so one edge is one row and
+    request, error and duration fields are summed over it. The result echoes
+    the window it used.
 
-    Not every relationship type carries request, error, and duration counts:
-    only `calls` does. An unfiltered result is ordered by relationship type and
-    endpoint, not by those counts, because ordering a mixed result by them
-    would rank every other kind of relationship last. Pass rel_type=calls to
-    order by error and request count.
+    Ordering: only `calls` edges carry request, error and duration counts, so
+    an unfiltered result is ordered by relationship type and endpoint. Ordering
+    a mixed result by those counts would rank every other relationship type
+    below a null. Pass rel_type=calls to order by error and request count.
 
-    confidence is derivation certainty, not health: 1.0 when both sides were
-    observed, 0.5 when only the caller was and the callee is inferred from a
-    peer attribute. `calls` edges only cover calls that propagated trace
-    context, so a dependency invoked without it is absent. A missing edge is
-    not evidence that two entities are unrelated, and entities are not
-    deduplicated across identity schemes -- the same process can appear under
-    two ids if two sources named it differently.
+    confidence is derivation certainty, not health. A paired or declared edge
+    is 1.0; an edge whose callee was named by a client-side peer attribute
+    rather than observed is 0.5, and that endpoint is a virtual node. Read
+    provenance for how a row was obtained rather than inferring it from the
+    number.
+
+    request_count counts calls whose client and server spans paired.
+    unmatched_count counts client spans with no matching server span, and is
+    not additive with it: a fall in request_count with unmatched_count present
+    means the callee stopped answering, while a fall in both means the caller
+    stopped asking. error_count aggregates span status verbatim, and some SDKs
+    mark a normal long-lived stream timeout as an error, so read the errors
+    before concluding from a rate.
+
+    A missing edge is not evidence that two entities are unrelated: it can also
+    mean the call was not instrumented, was sampled out, or fell outside this
+    window. Entities are not deduplicated across identity schemes, so one
+    process can appear under two ids if two sources named it differently --
+    compare their runs_on and part_of edges before treating them as two things.
 
     entity_id_attrs names the attributes an id was assembled from and
-    source_tables names the telemetry tables that witnessed it; go there for
-    the raw data. Identifiers from alerts and telemetry are not graph entity
-    ids unless a query returns that exact id.
+    source_tables names the telemetry tables that witnessed it; query those for
+    the underlying rows. Identifiers from alerts and other tools are not graph
+    ids unless a query here returned that exact string.
     """
     state = get_state()
     request = graph.GraphRequest.parse(
