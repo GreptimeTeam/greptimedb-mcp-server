@@ -13,6 +13,7 @@ from mcp import MCPError
 from .conftest import (
     CREDENTIALS_TABLE,
     MASK_PLACEHOLDER,
+    GRAPH_EDGES,
     METRICS_TABLE,
     SECRET_API_KEY,
     SECRET_PASSWORD,
@@ -364,10 +365,65 @@ async def test_graph_summary_reports_shape_without_returning_edges(seed):
         )
 
     by_type = {item["type"]: item for item in payload["relationship_types"]}
-    assert by_type["calls"]["source_types"] == ["service"]
     assert by_type["calls"]["count"] == 2
-    assert set(by_type["runs_on"]["destination_types"]) == {"k8s.pod", "k8s.node"}
+    assert by_type["calls"]["endpoints"] == [
+        {"source": "service", "destination": "service", "count": 2}
+    ]
+    # Pairs, not two sets: service->pod and pod->node must not read as
+    # service->node.
+    assert by_type["runs_on"]["endpoints"] == [
+        {"source": "k8s.pod", "destination": "k8s.node", "count": 1},
+        {"source": "service", "destination": "k8s.pod", "count": 1},
+    ]
     assert "items" not in payload
+
+
+async def test_graph_window_is_read_in_utc_whatever_the_session(seed):
+    """A literal without an offset is read in the session time zone."""
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    window = _graph_window(seed)
+    async with stdio_session(**{"--timezone": "Asia/Shanghai"}) as client:
+        payload = json.loads(
+            await call_text(
+                client, "query_semantic_graph", {"view": "summary", **window}
+            )
+        )
+
+    assert payload["relationship_count"] == len(GRAPH_EDGES)
+
+
+async def test_graph_returns_identifiers_verbatim(seed):
+    """A caller has to be able to feed a returned id straight back in."""
+    if not seed.graph_seeded:
+        pytest.skip("this GreptimeDB has no semantic graph")
+
+    window = _graph_window(seed)
+    async with stdio_session() as client:
+        payload = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {"view": "relationships", "rel_type": "calls", **window},
+            )
+        )
+        first = payload["items"][0]
+        refetched = json.loads(
+            await call_text(
+                client,
+                "query_semantic_graph",
+                {
+                    "view": "relationships",
+                    "src_id": first["src_id"],
+                    "dst_id": first["dst_id"],
+                    **window,
+                },
+            )
+        )
+
+    assert isinstance(first["src_id"], str)
+    assert refetched["item_count"] == 1
 
 
 async def test_graph_orders_mixed_relationships_by_type_not_red(seed):
@@ -417,7 +473,15 @@ async def test_graph_zero_result_keeps_the_envelope(seed):
     assert payload["status"] == "no_match"
     assert payload["items"] == []
     assert payload["applied_filters"]["rel_type"] == "calls"
-    assert payload["guidance"]["next_query"] == {
-        "view": "relationships",
-        "rel_type": "calls",
-    }
+
+    # The suggested retry drops the identifier, keeps the type filter, and
+    # carries the window, so a caller can run it as given.
+    next_query = payload["guidance"]["next_query"]
+    assert "src_id" not in next_query
+    assert next_query["rel_type"] == "calls"
+
+    async with stdio_session() as client:
+        retried = json.loads(
+            await call_text(client, "query_semantic_graph", next_query)
+        )
+    assert retried["status"] == "ok"

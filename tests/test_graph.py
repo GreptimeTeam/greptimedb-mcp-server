@@ -19,9 +19,7 @@ START = "2026-09-05T07:00:00Z"
 END = "2026-09-05T08:00:00Z"
 
 FULL_ENTITY_COLUMNS = frozenset(graph.ENTITY_REQUIRED_COLUMNS)
-FULL_RELATIONSHIP_COLUMNS = frozenset(
-    graph.RELATIONSHIP_REQUIRED_COLUMNS | set(graph.RED_COLUMNS) | {"duration_max"}
-)
+FULL_RELATIONSHIP_COLUMNS = frozenset(graph.RELATIONSHIP_REQUIRED_COLUMNS)
 
 
 class FakeCursor:
@@ -114,14 +112,17 @@ def test_calls_relationships_are_ordered_by_red():
 def test_no_match_guidance_drops_the_id_and_keeps_the_type():
     guidance = _no_match_guidance(request(rel_type="calls", src_id="unknown"))
 
-    assert guidance["next_query"] == {"view": "relationships", "rel_type": "calls"}
+    next_query = guidance["next_query"]
+    assert next_query["view"] == "relationships"
+    assert next_query["rel_type"] == "calls"
+    assert "src_id" not in next_query
     assert "canonical graph entity ID" in guidance["reason"]
 
 
 def test_no_match_guidance_without_an_id_points_at_the_summary():
     guidance = _no_match_guidance(request(rel_type="calls"))
 
-    assert guidance["next_query"] == {"view": "summary"}
+    assert guidance["next_query"]["view"] == "summary"
 
 
 @pytest.mark.parametrize(
@@ -175,8 +176,8 @@ def test_probe_caches_a_conclusive_answer_only():
     assert len(inconclusive.queries) == 2
 
 
-def test_summary_groups_endpoint_types_by_relationship():
-    """The caller learns the graph's shape without reading its edges."""
+def test_summary_reports_endpoint_pairs_not_two_sets():
+    """Two sets would imply service->node from service->pod and pod->node."""
     cursor = FakeCursor(
         rows=[
             ("runs_on", "service", "k8s.pod", 3),
@@ -188,23 +189,53 @@ def test_summary_groups_endpoint_types_by_relationship():
     types = GraphView()._relationship_types(cursor, TimeWindow.parse(START, END))
 
     runs_on = next(t for t in types if t["type"] == "runs_on")
-    assert runs_on["source_types"] == ["service", "k8s.pod"]
-    assert runs_on["destination_types"] == ["k8s.pod", "k8s.node"]
+    assert runs_on["endpoints"] == [
+        {"source": "service", "destination": "k8s.pod", "count": 3},
+        {"source": "k8s.pod", "destination": "k8s.node", "count": 2},
+    ]
     assert runs_on["count"] == 5
 
 
-def test_relationships_omit_red_columns_the_view_lacks():
-    """Selecting a column the view lacks fails the statement to plan."""
-    view = GraphView(
-        capability=GraphCapability(
-            "available",
-            entity_columns=FULL_ENTITY_COLUMNS,
-            relationship_columns=graph.RELATIONSHIP_REQUIRED_COLUMNS,
-        )
-    )
-    cursor = FakeCursor(rows=[])
+def test_a_view_missing_a_red_column_is_incompatible():
+    """The query reads every RED column, so a view without one cannot serve it."""
+    columns = {
+        graph.ENTITIES_VIEW: FULL_ENTITY_COLUMNS,
+        graph.RELATIONSHIPS_VIEW: FULL_RELATIONSHIP_COLUMNS - {"unmatched_count"},
+    }
 
-    view.relationships(cursor, request())
+    capability = GraphView().negotiate(FakeCursor(columns=columns))
 
-    assert "request_count" not in cursor.queries[0]
-    assert "duration_max" not in cursor.queries[0]
+    assert capability.status == "incompatible_schema"
+    assert "unmatched_count" in capability.detail
+
+
+def test_identifier_shaped_strings_survive_the_row_decode():
+    """Decoding every string would make entity_id "123" a number."""
+    columns = ["entity_id", "entity_id_attrs", "source_tables"]
+    row = ("123", '{"host":"123"}', '["public.t"]')
+
+    decoded = graph._row_dict(columns, row)
+
+    assert decoded["entity_id"] == "123"
+    assert decoded["entity_id_attrs"] == {"host": "123"}
+    assert decoded["source_tables"] == ["public.t"]
+
+
+def test_identifiers_that_look_like_json_literals_survive():
+    assert graph._row_dict(["src_id"], ("null",))["src_id"] == "null"
+    assert graph._row_dict(["dst_id"], ("true",))["dst_id"] == "true"
+
+
+def test_window_params_carry_their_offset():
+    """A literal without one is read in the session time zone."""
+    params = TimeWindow.parse(START, END).params
+
+    assert all(p.endswith("+00:00") for p in params)
+
+
+def test_no_match_guidance_next_query_is_runnable():
+    """start_time and end_time are required, so a retry without them fails."""
+    guidance = _no_match_guidance(request(rel_type="calls", src_id="unknown"))
+
+    assert set(guidance["next_query"]) >= {"view", "start_time", "end_time"}
+    GraphRequest.parse(**guidance["next_query"])
