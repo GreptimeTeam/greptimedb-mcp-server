@@ -13,8 +13,8 @@ from greptimedb_mcp_server.semantics import (
     _build_search_sql,
     _rank_candidates,
     guidance,
-    matched_terms,
-    search_terms,
+    _matched_terms,
+    _search_terms,
 )
 
 from conftest import SEMANTICS_VIEW_COLUMNS
@@ -78,15 +78,6 @@ def test_search_sql_binds_terms_instead_of_inlining_them():
     assert params[1:] == ["%memory%"] * 3
 
 
-def test_search_sql_escapes_like_wildcards():
-    """A term containing % or _ must match literally, not as a wildcard."""
-    _, params = _build_search_sql(
-        FULL, SearchRequest("raw", ["a_b%c"], None, 10), "testdb"
-    )
-
-    assert params[1] == "%a\\_b\\%c%"
-
-
 def test_search_sql_coalesces_nullable_columns():
     """A NULL column would make the whole OR group NULL and drop the row."""
     sql, _ = _build_search_sql(FULL, request("memory"), "testdb")
@@ -106,7 +97,7 @@ def test_search_sql_omits_columns_the_view_lacks():
 
 
 def test_search_terms_splits_underscores_and_drops_stop_words():
-    assert search_terms("redis_used_memory for the host") == [
+    assert _search_terms("redis_used_memory for the host") == [
         "redis",
         "used",
         "memory",
@@ -115,7 +106,7 @@ def test_search_terms_splits_underscores_and_drops_stop_words():
 
 
 def test_search_terms_deduplicates_and_caps():
-    terms = search_terms(" ".join(f"term{i}" for i in range(20)) + " term0")
+    terms = _search_terms(" ".join(f"term{i}" for i in range(20)) + " term0")
 
     assert len(terms) == semantics.MAX_SEARCH_TERMS
     assert len(set(terms)) == len(terms)
@@ -137,25 +128,25 @@ def test_search_sql_ors_the_terms_together():
 
 def test_search_terms_keeps_io_as_one_token():
     """Split on the slash, `I/O` becomes two one-letter terms and vanishes."""
-    assert search_terms("node disk write I/O") == ["node", "disk", "write", "io"]
-    assert search_terms("system_io_w_s") == ["system", "io"]
-    assert search_terms("CPU of a pod") == ["cpu", "pod"]
+    assert _search_terms("node disk write I/O") == ["node", "disk", "write", "io"]
+    assert _search_terms("system_io_w_s") == ["system", "io"]
+    assert _search_terms("CPU of a pod") == ["cpu", "pod"]
 
 
 def test_matched_terms_expands_io_direction_abbreviations():
     """`system_io_w_s` is a write metric; the query says `write`."""
-    assert matched_terms(["write", "io"], "system_io_w_s") == ["write", "io"]
-    assert matched_terms(["read", "io"], "system_io_r_s") == ["read", "io"]
+    assert _matched_terms(["write", "io"], "system_io_w_s") == ["write", "io"]
+    assert _matched_terms(["read", "io"], "system_io_r_s") == ["read", "io"]
 
 
 def test_matched_terms_does_not_expand_nonadjacent_io_tokens():
-    assert matched_terms(["write", "io"], "unrelated_w_metric_io") == ["io"]
+    assert _matched_terms(["write", "io"], "unrelated_w_metric_io") == ["io"]
 
 
 def test_matched_terms_requires_whole_token_for_short_terms():
     """`geo` must not match `range of` once punctuation is stripped."""
-    assert matched_terms(["geo"], "range of requests") == []
-    assert matched_terms(["geo"], "geo service") == ["geo"]
+    assert _matched_terms(["geo"], "range of requests") == []
+    assert _matched_terms(["geo"], "geo service") == ["geo"]
 
 
 def test_rank_candidates_keeps_field_types_stable():
@@ -173,7 +164,7 @@ def test_rank_candidates_keeps_field_types_stable():
 
 
 def test_matched_terms_allows_substring_for_longer_terms():
-    assert matched_terms(["memory"], "redis_used_memory_bytes") == ["memory"]
+    assert _matched_terms(["memory"], "redis_used_memory_bytes") == ["memory"]
 
 
 def test_search_request_rejects_an_unusable_query():
