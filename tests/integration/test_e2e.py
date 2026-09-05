@@ -286,17 +286,20 @@ async def test_prompts_render(seed):
     assert METRICS_TABLE in rendered.messages[0].content.text
 
 
-async def test_search_table_semantics_finds_the_seeded_table(seed):
+async def test_search_table_semantics(seed):
+    """Terms are ORed: a table matching only one of them is still a candidate."""
     async with stdio_session() as client:
         payload = json.loads(
-            await call_text(client, "search_table_semantics", {"query": "cpu metrics"})
+            await call_text(
+                client,
+                "search_table_semantics",
+                {"query": "cpu saturation percentile"},
+            )
         )
 
     assert payload["available"] is True
-    tables = [match["table"] for match in payload["matches"]]
-    assert METRICS_TABLE in tables
-
     match = next(m for m in payload["matches"] if m["table"] == METRICS_TABLE)
+    assert match["matched_terms"] == ["cpu"]
     assert match["signal_type"] == "metric"
     assert match["semantic_options"]["metric.type"] == "gauge"
 

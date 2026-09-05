@@ -1,10 +1,9 @@
-"""Reads GreptimeDB's table semantic metadata.
+"""Reads `information_schema.table_semantics`.
 
-Everything here is about one view, `information_schema.table_semantics`, whose
-shape varies by server version: `entity_declarations` arrived in GreptimeDB
-1.3, and selecting a column the view lacks fails the whole statement to plan.
-`SemanticsView` therefore negotiates the column list once and builds every
-query from what is actually exposed.
+The view's shape varies by server version -- `entity_declarations` arrived in
+GreptimeDB 1.3 -- and selecting a column it lacks fails the whole statement to
+plan, so `SemanticsView` negotiates the column list once and builds every query
+from what is actually exposed.
 """
 
 import json
@@ -17,7 +16,6 @@ from greptimedb_mcp_server.utils import escape_like_pattern
 
 VIEW = "information_schema.table_semantics"
 
-# Every column this server knows how to read, in SELECT order.
 COLUMNS = (
     "table_catalog",
     "table_schema",
@@ -32,7 +30,6 @@ COLUMNS = (
     "entity_declarations",
 )
 
-# Columns the searchable text is assembled from.
 SEARCH_COLUMNS = ("table_name", "semantic_options", "entity_declarations")
 
 VALID_SIGNAL_TYPES = ("metric", "log", "trace", "event")
@@ -114,13 +111,22 @@ class SearchRequest:
         )
 
 
+def _join_slash_abbreviations(value: str) -> str:
+    """Fold `I/O` into `io` so it survives tokenizing as one term.
+
+    Split on the slash it becomes `i` and `o`, which the one-character filter
+    then discards, and a search for `I/O` has nothing left to look for.
+    """
+    return re.sub(r"\b([A-Za-z])\s*/\s*([A-Za-z])\b", r"\1\2", value)
+
+
 def search_terms(query: str) -> list[str]:
     """Split a concept query into distinct searchable terms.
 
     Underscores become separators so that a query for `used memory` still
     matches `redis___used_memory_`.
     """
-    normalized = query.lower().replace("_", " ")
+    normalized = _join_slash_abbreviations(query).lower().replace("_", " ")
     terms = (
         term
         for term in re.findall(r"[a-z0-9.:-]+", normalized)
@@ -134,9 +140,20 @@ def matched_terms(terms: list[str], searchable: str) -> list[str]:
 
     Terms of one or two characters must match a whole token: a substring test
     would let `geo` match `range of`.
+
+    Legacy metric names abbreviate the I/O direction as a single letter, so
+    adjacent `io_w` and `io_r` are read back as `write` and `read`;
+    `unrelated_w_metric_io` is not a write metric. This and
+    `_join_slash_abbreviations` are ported from GreptimeTeam/agent-rca-bench,
+    where they are what made concept search work on legacy metric schemas.
     """
-    normalized = searchable.lower()
-    tokens = set(re.findall(r"[a-z0-9]+", normalized))
+    normalized = _join_slash_abbreviations(searchable).lower()
+    token_list = re.findall(r"[a-z0-9]+", normalized)
+    tokens = set(token_list)
+    adjacent = set(zip(token_list, token_list[1:]))
+    for direction, word in (("w", "write"), ("r", "read")):
+        if ("io", direction) in adjacent:
+            tokens.add(word)
     return [
         term
         for term in terms
@@ -292,13 +309,19 @@ def _build_search_sql(
         predicates.append("signal_type = %s")
         params.append(request.signal_type)
 
+    # Terms are ORed with each other: a table matching some of them is a
+    # candidate, and how many it matched is what ranking is for. ANDing them
+    # would drop `redis_used_memory` from a search for "redis memory usage"
+    # and leave every surviving row with an identical score.
+    term_clauses = []
     for term in request.terms:
         pattern = f"%{escape_like_pattern(term)}%"
         # COALESCE keeps a NULL column from making the whole OR group NULL,
         # which would drop rows that matched on another column.
         clauses = [f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable]
-        predicates.append(f"({' OR '.join(clauses)})")
+        term_clauses.append(f"({' OR '.join(clauses)})")
         params.extend([pattern] * len(clauses))
+    predicates.append(f"({' OR '.join(term_clauses)})")
 
     sql = (
         f"SELECT {', '.join(columns)} FROM {VIEW} "
