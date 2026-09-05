@@ -1,6 +1,76 @@
 import pytest
 import sys
 
+# information_schema.table_semantics as GreptimeDB 1.3 exposes it. The server
+# probes this list and builds its SELECT from it, so tests that need an older
+# view drop columns from the probe rather than from the rows.
+SEMANTICS_VIEW_COLUMNS = (
+    "table_catalog",
+    "table_schema",
+    "table_name",
+    "table_id",
+    "signal_type",
+    "source",
+    "source_version",
+    "pipeline",
+    "metadata_quality",
+    "semantic_options",
+    "entity_declarations",
+)
+
+ENTITY_DECLARATIONS = (
+    '[{"entity_type":"service","id":["service_name"],'
+    '"id_qualifier":"service_namespace","origin":"convention"}]'
+)
+
+
+def semantics_row(table_schema, table_name):
+    """One row of the semantics view, in SEMANTICS_VIEW_COLUMNS order."""
+    return (
+        "greptime",
+        table_schema,
+        table_name,
+        1024,
+        "metric",
+        "opentelemetry",
+        "1.0",
+        "",
+        "declared",
+        '{"metric.type":"counter","metric.unit":"By"}',
+        ENTITY_DECLARATIONS,
+    )
+
+
+# Candidates the search returns; ranking, not the LIKE filter, decides order.
+SEMANTICS_SEARCH_ROWS = (
+    (
+        "greptime",
+        "testdb",
+        "redis_used_memory",
+        2048,
+        "metric",
+        "prometheus",
+        "2.0",
+        "",
+        "inferred",
+        '{"metric.type":"gauge","metric.unit":"By"}',
+        None,
+    ),
+    (
+        "greptime",
+        "testdb",
+        "http_request_duration",
+        2049,
+        "metric",
+        "opentelemetry",
+        "1.0",
+        "",
+        "declared",
+        '{"metric.type":"histogram"}',
+        None,
+    ),
+)
+
 
 # Mock classes for MySQL connection
 class MockCursor:
@@ -29,21 +99,16 @@ class MockCursor:
                 self._results = [("user activity table",)]
             else:
                 self._results = []
+        elif self.query.upper().startswith(
+            "DESC TABLE INFORMATION_SCHEMA.TABLE_SEMANTICS"
+        ):
+            # Capability probe: one row per column of the semantics view.
+            self._results = [(name,) for name in SEMANTICS_VIEW_COLUMNS]
         elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
-            if args and args[1] == "users":
-                self._results = [
-                    (
-                        "greptime",
-                        args[0],
-                        args[1],
-                        1024,
-                        "metric",
-                        "opentelemetry",
-                        "",
-                        "declared",
-                        '{"metric.type":"counter","metric.unit":"By"}',
-                    )
-                ]
+            if "LIKE" in self.query.upper():
+                self._results = list(SEMANTICS_SEARCH_ROWS)
+            elif args and args[1] == "users":
+                self._results = [semantics_row(args[0], args[1])]
             else:
                 self._results = []
         elif "DESCRIBE" in self.query.upper():
@@ -129,17 +194,7 @@ class MockCursor:
         elif "INFORMATION_SCHEMA.TABLES" in self.query.upper():
             return [("table_comment", None)]
         elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
-            return [
-                ("table_catalog", None),
-                ("table_schema", None),
-                ("table_name", None),
-                ("table_id", None),
-                ("signal_type", None),
-                ("source", None),
-                ("pipeline", None),
-                ("metadata_quality", None),
-                ("semantic_options", None),
-            ]
+            return [(name, None) for name in SEMANTICS_VIEW_COLUMNS]
         elif "VERSION()" in self.query.upper():
             return [("version()", None)]
         elif "TQL" in self.query.upper():

@@ -284,3 +284,46 @@ async def test_prompts_render(seed):
         assert "table_operation" in prompts
         rendered = await client.get_prompt("table_operation", {"table": METRICS_TABLE})
     assert METRICS_TABLE in rendered.messages[0].content.text
+
+
+async def test_search_table_semantics_finds_the_seeded_table(seed):
+    async with stdio_session() as client:
+        payload = json.loads(
+            await call_text(client, "search_table_semantics", {"query": "cpu metrics"})
+        )
+
+    assert payload["available"] is True
+    tables = [match["table"] for match in payload["matches"]]
+    assert METRICS_TABLE in tables
+
+    match = next(m for m in payload["matches"] if m["table"] == METRICS_TABLE)
+    assert match["signal_type"] == "metric"
+    assert match["semantic_options"]["metric.type"] == "gauge"
+
+
+async def test_describe_table_reports_entity_declarations(seed):
+    async with stdio_session() as client:
+        profile = json.loads(
+            await call_text(
+                client,
+                "describe_table",
+                {"table": METRICS_TABLE, "include_samples": False},
+            )
+        )
+
+    semantics = profile["semantics"]
+    assert semantics["found"] is True
+    assert semantics["signal_type"] == "metric"
+
+    if seed.entity_declared:
+        types = {d["entity_type"] for d in semantics["entity_declarations"]}
+        assert "host" in types
+        assert any("id_qualifier" in line for line in profile["guidance"])
+    else:
+        # Older GreptimeDB: the column is absent and must be reported as a
+        # version limit rather than as "this table declares nothing".
+        assert semantics["missing_columns"] == ["entity_declarations"]
+        assert any(
+            "does not expose entity_declarations" in line
+            for line in profile["guidance"]
+        )
