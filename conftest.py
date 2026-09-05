@@ -102,7 +102,6 @@ class MockCursor:
         elif self.query.upper().startswith(
             "DESC TABLE INFORMATION_SCHEMA.TABLE_SEMANTICS"
         ):
-            # Capability probe: one row per column of the semantics view.
             self._results = [(name,) for name in SEMANTICS_VIEW_COLUMNS]
         elif "INFORMATION_SCHEMA.TABLE_SEMANTICS" in self.query.upper():
             if "LIKE" in self.query.upper():

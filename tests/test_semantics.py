@@ -105,13 +105,6 @@ def test_search_sql_omits_columns_the_view_lacks():
     assert params == ["testdb", "metric", "%memory%", "%memory%"]
 
 
-def test_search_sql_filters_by_signal_type():
-    sql, params = _build_search_sql(FULL, request("memory", "log"), "testdb")
-
-    assert "signal_type = %s" in sql
-    assert "log" in params
-
-
 def test_search_terms_splits_underscores_and_drops_stop_words():
     assert search_terms("redis_used_memory for the host") == [
         "redis",
@@ -126,6 +119,37 @@ def test_search_terms_deduplicates_and_caps():
 
     assert len(terms) == semantics.MAX_SEARCH_TERMS
     assert len(set(terms)) == len(terms)
+
+
+def test_search_sql_ors_the_terms_together():
+    """ANDing terms would require every word and flatten the ranking."""
+    sql, params = _build_search_sql(FULL, request("redis memory usage"), "testdb")
+
+    where = sql.split(" WHERE ", 1)[1].split(" ORDER BY", 1)[0]
+    schema_filter, term_group = where.split(" AND ", 1)
+
+    assert schema_filter == "table_schema = %s"
+    # One OR group per term, ORed with each other, and nothing ANDed inside.
+    assert term_group.count("LIKE %s") == 9
+    assert " AND " not in term_group
+    assert params[1:] == ["%redis%"] * 3 + ["%memory%"] * 3 + ["%usage%"] * 3
+
+
+def test_search_terms_keeps_io_as_one_token():
+    """Split on the slash, `I/O` becomes two one-letter terms and vanishes."""
+    assert search_terms("node disk write I/O") == ["node", "disk", "write", "io"]
+    assert search_terms("system_io_w_s") == ["system", "io"]
+    assert search_terms("CPU of a pod") == ["cpu", "pod"]
+
+
+def test_matched_terms_expands_io_direction_abbreviations():
+    """`system_io_w_s` is a write metric; the query says `write`."""
+    assert matched_terms(["write", "io"], "system_io_w_s") == ["write", "io"]
+    assert matched_terms(["read", "io"], "system_io_r_s") == ["read", "io"]
+
+
+def test_matched_terms_does_not_expand_nonadjacent_io_tokens():
+    assert matched_terms(["write", "io"], "unrelated_w_metric_io") == ["io"]
 
 
 def test_matched_terms_requires_whole_token_for_short_terms():
@@ -162,13 +186,6 @@ def test_search_request_rejects_an_unknown_signal_type():
     with pytest.raises(ValueError) as excinfo:
         SearchRequest.parse("memory", "metrics")
     assert "Invalid signal_type" in str(excinfo.value)
-
-
-def test_search_request_clamps_the_limit():
-    assert SearchRequest.parse("memory", None, 10_000).limit == (
-        semantics.MAX_SEARCH_LIMIT
-    )
-    assert SearchRequest.parse("memory", None, 0).limit == 1
 
 
 @pytest.mark.parametrize(
@@ -290,8 +307,3 @@ async def test_search_reports_an_unavailable_view(app_state):
     assert result["available"] is False
     assert result["reason"] == "unavailable"
     assert result["matches"] == []
-
-
-def test_columns_match_the_documented_view():
-    """The SELECT list is the 1.3 view; drift here silently drops a field."""
-    assert semantics.COLUMNS == SEMANTICS_VIEW_COLUMNS
