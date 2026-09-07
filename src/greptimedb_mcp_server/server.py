@@ -634,7 +634,9 @@ async def search_table_semantics(
     ],
     signal_type: Annotated[
         str | None,
-        f"Restrict results to one signal type: {', '.join(semantics.VALID_SIGNAL_TYPES)}",
+        "Restrict results to one signal type: "
+        f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
+        "was never stamped are excluded by this filter.",
     ] = None,
     limit: Annotated[
         int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
@@ -648,8 +650,13 @@ async def search_table_semantics(
 
     It searches schema metadata only, never telemetry row values, so it can say
     which table holds Redis memory usage but not which row belongs to
-    `Redis02`. Once it returns candidates, query their data or describe one of
-    them; do not describe every candidate in turn.
+    `Redis02`. It ranks on the values in that metadata, not on the schema's own
+    key names, so search for `gauge` or `bytes` rather than `metric type`. Once
+    it returns candidates, query their data or describe one of them; do not
+    describe every candidate in turn.
+
+    It covers only the database this server is connected to, unlike
+    describe_table, which accepts a schema-qualified name.
 
     Only tables carrying a `greptime.semantic.*` option, or one a built-in
     convention derives a declaration for, are visible here. A table absent from
@@ -670,7 +677,14 @@ async def search_table_semantics(
         result = await asyncio.to_thread(_sync_search)
     except Error as e:
         logger.error(f"Error searching table semantics for '{query}': {e}")
-        return f"Error searching table semantics: {str(e)}"
+        # Same envelope as every other outcome, so a caller can parse one shape.
+        result = {
+            "query": query,
+            "available": False,
+            "reason": "error",
+            "error": str(e),
+            "matches": [],
+        }
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 

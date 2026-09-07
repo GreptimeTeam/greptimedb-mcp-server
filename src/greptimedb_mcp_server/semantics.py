@@ -139,7 +139,7 @@ def _matched_terms(terms: list[str], searchable: str) -> list[str]:
     """Return the terms a candidate matched, for ranking.
 
     Terms of one or two characters must match a whole token: a substring test
-    would let `geo` match `range of`.
+    would let `id` match `identity`.
 
     Legacy metric names abbreviate the I/O direction as a single letter, so
     adjacent `io_w` and `io_r` are read back as `write` and `read`;
@@ -197,6 +197,12 @@ def _availability_guidance(profile: dict) -> list[str]:
                 f"{VIEW} exists but this account cannot read it. Signal type "
                 "and query pattern below are schema/sample-based inference."
             ]
+        if profile.get("reason") == "error":
+            return [
+                f"Reading {VIEW} failed; the error field says why. This is a "
+                "failed read, not a statement about what this server supports, "
+                "and a retry may succeed."
+            ]
         return [
             "Table semantic metadata is unavailable. The connected GreptimeDB "
             f"version may not support {VIEW}."
@@ -242,15 +248,29 @@ def _entity_declaration_guidance(profile: dict) -> list[str]:
             f"This table contributes these semantic entities: {', '.join(types)}. "
             "Each declaration's id lists the identifying columns, in order."
         )
-    # The declared/convention split and a dropped id_qualifier are the only
-    # observable causes of one process appearing under two entity ids.
-    hints.append(
-        "Check origin and id_qualifier on each declaration before treating two "
-        "ids as two things. An explicit declaration replaces the built-in "
-        "convention for that entity type outright, so one that omits "
-        "id_qualifier silently drops the qualifier the convention would have "
-        "applied, and the same process can then appear under two ids."
+    # Only a hand-written declaration can drop the qualifier: it replaces the
+    # convention for that entity type outright, so one that omits id_qualifier
+    # loses the qualifier the convention would have applied. Naming the
+    # affected types keeps this off every other table's profile.
+    unqualified = sorted(
+        {
+            str(item.get("entity_type"))
+            for item in declarations
+            if isinstance(item, dict)
+            and item.get("origin") == "declared"
+            and not item.get("id_qualifier")
+            and item.get("entity_type")
+        }
     )
+    if unqualified:
+        hints.append(
+            f"These declarations are explicit and name no id_qualifier: "
+            f"{', '.join(unqualified)}. An explicit declaration replaces the "
+            "built-in convention for its entity type outright, so any "
+            "qualifier the convention would have applied is dropped, and one "
+            "process can then appear under two ids. Compare origin and "
+            "id_qualifier before treating two ids as two things."
+        )
     return hints
 
 
@@ -346,10 +366,37 @@ def _rank_candidates(columns: list[str], rows: list, terms: list[str]) -> list[d
     return candidates
 
 
+def _json_leaves(value) -> list[str]:
+    """Collect the leaf values of a decoded JSON payload."""
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in _json_leaves(item)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _json_leaves(item)]
+    return [str(value)] if value not in (None, "") else []
+
+
+def _searchable_text(values: dict) -> str:
+    """Assemble the text a candidate is ranked on.
+
+    Only the values of the JSON columns take part. Their key names are the
+    schema's own vocabulary -- metric.type, origin, entity_type -- so ranking
+    on them gives a query like "metric type unit" a perfect score against every
+    metric table and collapses the ordering to table name.
+    """
+    parts = [str(values["table_name"])] if values.get("table_name") else []
+    for column in ("semantic_options", "entity_declarations"):
+        raw = values.get(column)
+        if not raw:
+            continue
+        try:
+            parts.extend(_json_leaves(json.loads(raw)))
+        except (TypeError, json.JSONDecodeError):
+            parts.append(str(raw))
+    return " ".join(parts)
+
+
 def _candidate(values: dict, terms: list[str]) -> dict | None:
-    searchable = " ".join(
-        str(values.get(column)) for column in SEARCH_COLUMNS if values.get(column)
-    )
+    searchable = _searchable_text(values)
     matched = _matched_terms(terms, searchable)
     if not matched:
         # The SQL LIKE matched a substring the ranking rules reject, such as a
@@ -448,6 +495,9 @@ class SemanticsView:
         rows = cursor.fetchall()
         candidates = _rank_candidates(columns, rows, request.terms)
 
+        # ORDER BY in the scan makes the truncation deterministic rather than
+        # arbitrary; the ranking below decides the order that is returned.
+        scan_truncated = len(rows) >= SEARCH_SCAN_LIMIT
         result = {
             "query": request.query,
             "terms": request.terms,
@@ -456,9 +506,15 @@ class SemanticsView:
             "searched_columns": capability.selectable(SEARCH_COLUMNS),
             "matched_table_count": len(candidates),
             "matches": candidates[: request.limit],
-            "truncated": len(rows) >= SEARCH_SCAN_LIMIT
-            or len(candidates) > request.limit,
+            "truncated": scan_truncated or len(candidates) > request.limit,
         }
+        if scan_truncated:
+            result["ranking_note"] = (
+                f"More than {SEARCH_SCAN_LIMIT} tables matched, so ranking saw "
+                "only the first that many by table name. These are not "
+                "necessarily the best matches; narrow the query or set "
+                "signal_type."
+            )
         unsearched = capability.missing(SEARCH_COLUMNS)
         if unsearched:
             result["unsearched_columns"] = unsearched

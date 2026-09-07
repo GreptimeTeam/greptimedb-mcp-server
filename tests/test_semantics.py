@@ -230,6 +230,15 @@ def test_guidance_flags_a_version_limit():
     assert "not evidence" in hints[0]
 
 
+def _declared(**declaration):
+    return {
+        "included": True,
+        "available": True,
+        "found": True,
+        "entity_declarations": [declaration],
+    }
+
+
 def test_guidance_lists_declared_entity_types():
     hints = guidance(
         {
@@ -244,7 +253,59 @@ def test_guidance_lists_declared_entity_types():
     )
 
     assert "host, service" in hints[0]
-    assert any("id_qualifier" in line for line in hints)
+
+
+def test_guidance_warns_only_when_a_qualifier_can_be_dropped():
+    """Only a hand-written declaration can drop the convention's qualifier."""
+    at_risk = guidance(_declared(entity_type="service", id=["name"], origin="declared"))
+    qualified = guidance(
+        _declared(
+            entity_type="service",
+            id=["name"],
+            origin="declared",
+            id_qualifier="namespace",
+        )
+    )
+    conventional = guidance(
+        _declared(entity_type="service", id=["name"], origin="convention")
+    )
+
+    assert any("id_qualifier" in line for line in at_risk)
+    assert not any("id_qualifier" in line for line in qualified)
+    assert not any("id_qualifier" in line for line in conventional)
+
+
+def test_guidance_reports_a_failed_read_as_a_failed_read():
+    """A transient query failure is not a statement about the server version."""
+    hints = guidance(
+        {"included": True, "available": False, "reason": "error", "error": "timeout"}
+    )
+
+    assert "may not support" not in hints[0]
+    assert "retry" in hints[0]
+
+
+def test_ranking_ignores_the_schemas_own_key_names():
+    """Structural words would otherwise score every table alike."""
+    columns = ["table_name", "semantic_options", "entity_declarations"]
+    rows = [
+        ("it_cpu", '{"metric.type":"gauge","metric.unit":"percent"}', None),
+        ("orders_total", '{"metric.type":"counter"}', None),
+    ]
+
+    assert _rank_candidates(columns, rows, ["metric", "type", "unit"]) == []
+    # Values still rank, so the vocabulary a user actually searches survives.
+    [gauge] = _rank_candidates(columns, rows, ["gauge"])
+    assert gauge["table"] == "it_cpu"
+
+
+def test_ranking_still_sees_entity_declaration_values():
+    columns = ["table_name", "semantic_options", "entity_declarations"]
+    rows = [("t", None, '[{"entity_type":"k8s.pod","id":["pod"]}]')]
+
+    [match] = _rank_candidates(columns, rows, ["pod"])
+
+    assert match["matched_terms"] == ["pod"]
 
 
 def test_guidance_when_the_table_declares_no_entities():
