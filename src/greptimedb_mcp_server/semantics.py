@@ -109,28 +109,49 @@ class SearchRequest:
         )
 
 
-def _join_slash_abbreviations(value: str) -> str:
-    """Fold `I/O` into `io` so it survives tokenizing as one term.
+# Identifier tokens: an ALL-CAPS run, a word, or a number. Splitting on case
+# transitions as well as separators is what lets `usedMemoryBytes` and
+# `used_memory_bytes` tokenize alike, and keeps `nodeCPUSeconds` from becoming
+# one opaque token.
+_TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Za-z][a-z0-9]*|[0-9]+")
+_SLASH_PAIR = re.compile(r"\b([A-Za-z])\s*/\s*([A-Za-z])\b")
 
-    Split on the slash it becomes `i` and `o`, which the one-character filter
-    then discards, and a search for `I/O` has nothing left to look for.
+# Legacy metric names abbreviate an I/O direction as a single letter beside the
+# subsystem, so `system_io_w_s` is a write metric. Each entry maps the word a
+# caller searches for to the adjacent token pair that stands for it. Ported
+# from GreptimeTeam/agent-rca-bench, where this is what made concept search
+# work on legacy metric schemas.
+TOKEN_SYNONYMS = {"write": ("io", "w"), "read": ("io", "r")}
+
+MIN_PREFIX_TERM = 3
+
+
+def _tokens(text: str) -> list[str]:
+    """Split an identifier or a query into comparable tokens.
+
+    A slash between two single letters is not a separator: `I/O` is one term,
+    and splitting it leaves two one-character tokens that the term filter then
+    discards, so a search for it would have nothing to look for.
     """
-    return re.sub(r"\b([A-Za-z])\s*/\s*([A-Za-z])\b", r"\1\2", value)
+    joined = _SLASH_PAIR.sub(r"\1\2", text)
+    return [token.lower() for token in _TOKEN.findall(joined)]
+
+
+def _expanded_tokens(text: str) -> set[str]:
+    """Tokens of `text`, plus the words its abbreviations stand for."""
+    tokens = _tokens(text)
+    expanded = set(tokens)
+    adjacent = set(zip(tokens, tokens[1:]))
+    for word, pair in TOKEN_SYNONYMS.items():
+        if pair in adjacent:
+            expanded.add(word)
+    return expanded
 
 
 def _search_terms(query: str) -> list[str]:
-    """Split a concept query into distinct searchable terms.
-
-    Underscores become separators so that a query for `used memory` still
-    matches `redis___used_memory_`. The character class also keeps LIKE
-    metacharacters out of a term, which is what lets a term go into a LIKE
-    pattern as-is.
-    """
-    normalized = _join_slash_abbreviations(query).lower().replace("_", " ")
+    """Split a concept query into distinct searchable terms."""
     terms = (
-        term
-        for term in re.findall(r"[a-z0-9.:-]+", normalized)
-        if len(term) > 1 and term not in STOP_WORDS
+        term for term in _tokens(query) if len(term) > 1 and term not in STOP_WORDS
     )
     return list(dict.fromkeys(terms))[:MAX_SEARCH_TERMS]
 
@@ -138,27 +159,36 @@ def _search_terms(query: str) -> list[str]:
 def _matched_terms(terms: list[str], searchable: str) -> list[str]:
     """Return the terms a candidate matched, for ranking.
 
-    Terms of one or two characters must match a whole token: a substring test
-    would let `id` match `identity`.
-
-    Legacy metric names abbreviate the I/O direction as a single letter, so
-    adjacent `io_w` and `io_r` are read back as `write` and `read`;
-    `unrelated_w_metric_io` is not a write metric. This and
-    `_join_slash_abbreviations` are ported from GreptimeTeam/agent-rca-bench,
-    where they are what made concept search work on legacy metric schemas.
+    One rule, applied per token: the term is the token, or -- from three
+    characters up -- a prefix of it. Matching per token rather than across the
+    whole string is what keeps `geo` out of `range of`, and a prefix rather
+    than a substring is what keeps it out of `rangeof` too.
     """
-    normalized = _join_slash_abbreviations(searchable).lower()
-    token_list = re.findall(r"[a-z0-9]+", normalized)
-    tokens = set(token_list)
-    adjacent = set(zip(token_list, token_list[1:]))
-    for direction, word in (("w", "write"), ("r", "read")):
-        if ("io", direction) in adjacent:
-            tokens.add(word)
+    tokens = _expanded_tokens(searchable)
     return [
         term
         for term in terms
-        if term in tokens or (len(term) > 2 and term in normalized)
+        if term in tokens
+        or (
+            len(term) >= MIN_PREFIX_TERM
+            and any(token.startswith(term) for token in tokens)
+        )
     ]
+
+
+def _recall_patterns(term: str) -> list[str]:
+    """LIKE patterns that must reach every row `_matched_terms` would accept.
+
+    A token or prefix match implies the term appears as a substring, so one
+    pattern covers it. A synonym does not: nothing in `system_io_w_s` contains
+    `write`, so searching for the abbreviation is what puts the row in front of
+    the matcher.
+    """
+    patterns = [term]
+    pair = TOKEN_SYNONYMS.get(term)
+    if pair:
+        patterns.append(pair[0])
+    return patterns
 
 
 def _parse_json_column(value, column: str, expected: type):
@@ -319,7 +349,13 @@ def _signal_guidance(profile: dict) -> list[str]:
 def _build_search_sql(
     capability: Capability, request: SearchRequest, table_schema: str
 ) -> tuple[str, list]:
-    """Build the candidate query and its bound parameters."""
+    """Build the candidate query and its bound parameters.
+
+    This LIKE filter is a deliberate over-approximation whose only job is to
+    bound what gets read; `_matched_terms` is the single definition of a match
+    and decides what is returned. Every pattern here is a superset of what that
+    rule accepts, so narrowing the read never hides a row the ranking wanted.
+    """
     columns = capability.selectable(COLUMNS)
     searchable = capability.selectable(SEARCH_COLUMNS)
 
@@ -335,12 +371,14 @@ def _build_search_sql(
     # and leave every surviving row with an identical score.
     term_clauses = []
     for term in request.terms:
-        pattern = f"%{term}%"
-        # COALESCE keeps a NULL column from making the whole OR group NULL,
-        # which would drop rows that matched on another column.
-        clauses = [f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable]
-        term_clauses.append(f"({' OR '.join(clauses)})")
-        params.extend([pattern] * len(clauses))
+        for pattern in _recall_patterns(term):
+            # COALESCE keeps a NULL column from making the whole OR group NULL,
+            # which would drop rows that matched on another column.
+            clauses = [
+                f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable
+            ]
+            term_clauses.append(f"({' OR '.join(clauses)})")
+            params.extend([f"%{pattern}%"] * len(clauses))
     predicates.append(f"({' OR '.join(term_clauses)})")
 
     sql = (

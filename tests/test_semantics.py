@@ -8,6 +8,7 @@ from mysql.connector import Error
 from greptimedb_mcp_server import semantics, server
 from greptimedb_mcp_server.semantics import (
     Capability,
+    _tokens,
     SearchRequest,
     SemanticsView,
     _build_search_sql,
@@ -141,6 +142,46 @@ def test_matched_terms_expands_io_direction_abbreviations():
 
 def test_matched_terms_does_not_expand_nonadjacent_io_tokens():
     assert _matched_terms(["write", "io"], "unrelated_w_metric_io") == ["io"]
+
+
+def test_tokens_split_identifiers_however_they_are_written():
+    """snake, camel, acronym, dotted and numeric all reduce to the same words."""
+    assert _tokens("used_memory_bytes") == ["used", "memory", "bytes"]
+    assert _tokens("usedMemoryBytes") == ["used", "memory", "bytes"]
+    assert _tokens("nodeCPUSeconds") == ["node", "cpu", "seconds"]
+    assert _tokens("os.linux.mem-free") == ["os", "linux", "mem", "free"]
+    assert _tokens("redis_Redis_6379_Redis___used_memory_") == [
+        "redis",
+        "redis",
+        "6379",
+        "redis",
+        "used",
+        "memory",
+    ]
+
+
+def test_camel_case_names_are_searchable():
+    """This worked before only as a side effect of substring matching."""
+    assert _matched_terms(["memory"], "usedMemoryBytes") == ["memory"]
+    assert _matched_terms(["cpu"], "nodeCPUSeconds") == ["cpu"]
+
+
+def test_a_term_matches_a_token_prefix():
+    assert _matched_terms(["mem"], "os_linux_memory_usage_percent") == ["mem"]
+    assert _matched_terms(["dur"], "http_request_duration_seconds") == ["dur"]
+
+
+def test_prefix_matching_does_not_cross_token_boundaries():
+    """A substring test let `geo` match `rangeof`; a prefix per token cannot."""
+    assert _matched_terms(["geo"], "range_of_requests") == []
+    assert _matched_terms(["geo"], "rangeof_requests") == []
+
+
+def test_search_recalls_the_rows_a_synonym_would_match():
+    """Nothing in `system_io_w_s` contains `write`, so the scan must ask for io."""
+    _, params = _build_search_sql(FULL, request("write"), "testdb")
+
+    assert "%io%" in params
 
 
 def test_matched_terms_requires_whole_token_for_short_terms():
