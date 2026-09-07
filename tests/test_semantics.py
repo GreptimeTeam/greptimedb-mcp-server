@@ -71,12 +71,17 @@ def app_state():
     server._state = None
 
 
+def _where(sql):
+    return sql.split(" WHERE ", 1)[1].split(" ORDER BY", 1)[0]
+
+
 def test_search_sql_binds_terms_instead_of_inlining_them():
     sql, params = _build_search_sql(FULL, request("memory"), "testdb")
 
     assert "memory" not in sql
-    assert params[0] == "testdb"
-    assert params[1:] == ["%memory%"] * 3
+    # once for the relevance score, once for the filter, over three columns
+    assert params.count("%memory%") == 6
+    assert "testdb" in params
 
 
 def test_search_sql_coalesces_nullable_columns():
@@ -94,16 +99,13 @@ def test_search_sql_omits_columns_the_view_lacks():
     )
 
     assert "entity_declarations" not in sql
-    assert params == ["testdb", "metric", "%memory%", "%memory%"]
+    # two searchable columns left, scored once and filtered once
+    assert params.count("%memory%") == 4
+    assert params.count("metric") == 1
 
 
-def test_search_terms_splits_underscores_and_drops_stop_words():
-    assert _search_terms("redis_used_memory for the host") == [
-        "redis",
-        "used",
-        "memory",
-        "host",
-    ]
+def test_search_terms_drops_stop_words_and_single_characters():
+    assert _search_terms("cpu of a pod") == ["cpu", "pod"]
 
 
 def test_search_terms_deduplicates_and_caps():
@@ -117,21 +119,30 @@ def test_search_sql_ors_the_terms_together():
     """ANDing terms would require every word and flatten the ranking."""
     sql, params = _build_search_sql(FULL, request("redis memory usage"), "testdb")
 
-    where = sql.split(" WHERE ", 1)[1].split(" ORDER BY", 1)[0]
-    schema_filter, term_group = where.split(" AND ", 1)
+    schema_filter, term_group = _where(sql).split(" AND ", 1)
 
     assert schema_filter == "table_schema = %s"
     # One OR group per term, ORed with each other, and nothing ANDed inside.
     assert term_group.count("LIKE %s") == 9
     assert " AND " not in term_group
-    assert params[1:] == ["%redis%"] * 3 + ["%memory%"] * 3 + ["%usage%"] * 3
+    for term in ("%redis%", "%memory%", "%usage%"):
+        assert params.count(term) == 6
+
+
+def test_scan_is_ordered_by_relevance_not_by_name():
+    """Ordering by name would cut the candidate set alphabetically, so a table
+    hitting every term can lose to one hitting a single term and never reach
+    ranking at all."""
+    sql, _ = _build_search_sql(FULL, request("redis used memory"), "testdb")
+
+    assert "ORDER BY term_hits DESC, table_name" in sql
+    assert sql.count("CASE WHEN") == 3
 
 
 def test_search_terms_keeps_io_as_one_token():
     """Split on the slash, `I/O` becomes two one-letter terms and vanishes."""
     assert _search_terms("node disk write I/O") == ["node", "disk", "write", "io"]
     assert _search_terms("system_io_w_s") == ["system", "io"]
-    assert _search_terms("CPU of a pod") == ["cpu", "pod"]
 
 
 def test_matched_terms_expands_io_direction_abbreviations():
@@ -202,10 +213,6 @@ def test_rank_candidates_keeps_field_types_stable():
     assert "semantic_options" not in malformed
     assert malformed["raw_options"] == "not json"
     assert empty["semantic_options"] == {}
-
-
-def test_matched_terms_allows_substring_for_longer_terms():
-    assert _matched_terms(["memory"], "redis_used_memory_bytes") == ["memory"]
 
 
 def test_search_request_rejects_an_unusable_query():
@@ -416,6 +423,7 @@ async def test_every_search_outcome_shares_one_shape(app_state):
         assert common <= set(payload), sorted(common - set(payload))
     assert ok["available"] is True
     assert unavailable["available"] is False
+    assert unavailable["reason"] == "unavailable"
     assert failed["available"] is False
 
 

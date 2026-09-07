@@ -369,40 +369,49 @@ def _build_search_sql(
 ) -> tuple[str, list]:
     """Build the candidate query and its bound parameters.
 
-    This LIKE filter is a deliberate over-approximation whose only job is to
-    bound what gets read; `_matched_terms` is the single definition of a match
-    and decides what is returned. Every pattern here is a superset of what that
-    rule accepts, so narrowing the read never hides a row the ranking wanted.
+    The LIKE filter is a deliberate over-approximation that only bounds what
+    gets read; `_matched_terms` decides what is returned. Every pattern here is
+    a superset of what that rule accepts, so narrowing never hides a row.
+
+    Ordering by hit count rather than by name is what makes the scan limit
+    safe: cut alphabetically, a table matching every term loses to one matching
+    a single term whose name sorts earlier and never reaches ranking. The name
+    is the tie-break, so the truncation stays deterministic.
     """
     columns = capability.selectable(COLUMNS)
     searchable = capability.selectable(SEARCH_COLUMNS)
 
+    # COALESCE keeps a NULL column from making a group NULL, which would drop
+    # rows that matched on another column.
+    groups = []
+    group_params: list = []
+    for term in request.terms:
+        patterns = _recall_patterns(term)
+        clauses = [
+            f"LOWER(COALESCE({column}, '')) LIKE %s"
+            for _ in patterns
+            for column in searchable
+        ]
+        groups.append(f"({' OR '.join(clauses)})")
+        group_params.extend(f"%{pattern}%" for pattern in patterns for _ in searchable)
+
+    # Terms are ORed: a table matching some of them is a candidate, and how
+    # many it matched is what ranking is for. ANDing them would drop
+    # `redis_used_memory` from a search for "redis memory usage".
+    hits = " + ".join(f"CASE WHEN {group} THEN 1 ELSE 0 END" for group in groups)
+
     predicates = ["table_schema = %s"]
-    params: list = [table_schema]
+    params: list = [*group_params, table_schema]
     if request.signal_type:
         predicates.append("signal_type = %s")
         params.append(request.signal_type)
-
-    # Terms are ORed with each other: a table matching some of them is a
-    # candidate, and how many it matched is what ranking is for. ANDing them
-    # would drop `redis_used_memory` from a search for "redis memory usage"
-    # and leave every surviving row with an identical score.
-    term_clauses = []
-    for term in request.terms:
-        for pattern in _recall_patterns(term):
-            # COALESCE keeps a NULL column from making the whole OR group NULL,
-            # which would drop rows that matched on another column.
-            clauses = [
-                f"LOWER(COALESCE({column}, '')) LIKE %s" for column in searchable
-            ]
-            term_clauses.append(f"({' OR '.join(clauses)})")
-            params.extend([f"%{pattern}%"] * len(clauses))
-    predicates.append(f"({' OR '.join(term_clauses)})")
+    predicates.append(f"({' OR '.join(groups)})")
+    params.extend(group_params)
 
     sql = (
-        f"SELECT {', '.join(columns)} FROM {VIEW} "
+        f"SELECT {', '.join(columns)}, {hits} AS term_hits FROM {VIEW} "
         f"WHERE {' AND '.join(predicates)} "
-        f"ORDER BY table_name LIMIT {SEARCH_SCAN_LIMIT}"
+        f"ORDER BY term_hits DESC, table_name LIMIT {SEARCH_SCAN_LIMIT}"
     )
     return sql, params
 
@@ -560,9 +569,9 @@ class SemanticsView:
         if scan_truncated:
             result["ranking_note"] = (
                 f"More than {SEARCH_SCAN_LIMIT} tables matched, so ranking saw "
-                "only the first that many by table name. These are not "
-                "necessarily the best matches; narrow the query or set "
-                "signal_type."
+                "the best that many by how many query terms each hit. Rows "
+                "below that cut were not considered; narrow the query or set "
+                "signal_type to be sure of the ordering."
             )
         unsearched = capability.missing(SEARCH_COLUMNS)
         if unsearched:
