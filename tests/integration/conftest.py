@@ -18,7 +18,7 @@ import mysql.connector
 import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 HOST = os.getenv("GREPTIMEDB_IT_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.getenv("GREPTIMEDB_IT_PORT", "4002"))
@@ -120,8 +120,8 @@ def seed(db):
 def server_argv(**overrides) -> list[str]:
     """Build the CLI argv for a server subprocess pointed at the test instance.
 
-    Audit logging is left enabled on purpose: it monkey-patches the SDK's private
-    tool manager, so every tool call here also proves that hook still works.
+    Audit logging is left enabled on purpose, so every tool call here also
+    exercises the audit path wrapped around each tool.
     """
     flags = {
         "--host": HOST,
@@ -183,10 +183,9 @@ async def streamable_http_session(**overrides):
     )
     try:
         _wait_for_port(port)
-        async with streamablehttp_client(f"http://127.0.0.1:{port}/mcp") as (
+        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
             read,
             write,
-            _,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()

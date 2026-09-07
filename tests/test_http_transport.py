@@ -7,7 +7,7 @@ import socket
 from contextlib import closing
 from unittest.mock import patch
 
-import httpx
+import httpx2
 
 
 def find_free_port() -> int:
@@ -54,22 +54,22 @@ class TestStreamableHttpTransport:
         self, free_port, mock_db_connection
     ):
         """Test that initialize request returns valid MCP protocol response."""
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         @test_mcp.tool()
         def ping() -> str:
             return "pong"
 
         async def run_server():
-            await test_mcp.run_streamable_http_async()
+            await test_mcp.run_streamable_http_async(host="127.0.0.1", port=free_port)
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 response = await client.post(
                     f"http://127.0.0.1:{free_port}/mcp",
                     json={
@@ -122,18 +122,18 @@ class TestStreamableHttpTransport:
         self, free_port, mock_db_connection
     ):
         """Test that /mcp endpoint returns error for invalid JSON."""
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         async def run_server():
-            await test_mcp.run_streamable_http_async()
+            await test_mcp.run_streamable_http_async(host="127.0.0.1", port=free_port)
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 response = await client.post(
                     f"http://127.0.0.1:{free_port}/mcp",
                     content=b"not valid json",
@@ -161,18 +161,18 @@ class TestSseTransport:
         self, free_port, mock_db_connection
     ):
         """Test that /sse endpoint returns SSE event with messages endpoint."""
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         async def run_server():
-            await test_mcp.run_sse_async()
+            await test_mcp.run_sse_async(host="127.0.0.1", port=free_port)
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 async with client.stream(
                     "GET", f"http://127.0.0.1:{free_port}/sse", timeout=2.0
                 ) as response:
@@ -190,7 +190,7 @@ class TestSseTransport:
 
                     # Verify endpoint URL is provided
                     assert "/messages/" in event_data
-        except httpx.ReadTimeout:
+        except httpx2.ReadTimeout:
             pass  # SSE stream stays open, timeout is expected
         finally:
             server_task.cancel()
@@ -204,18 +204,18 @@ class TestSseTransport:
         self, free_port, mock_db_connection
     ):
         """Test that /messages/ endpoint rejects requests without valid session."""
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         async def run_server():
-            await test_mcp.run_sse_async()
+            await test_mcp.run_sse_async(host="127.0.0.1", port=free_port)
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 response = await client.post(
                     f"http://127.0.0.1:{free_port}/messages/",
                     json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
@@ -268,24 +268,26 @@ class TestDnsRebindingProtection:
     @pytest.mark.asyncio
     async def test_protection_disabled_by_default(self, free_port, mock_db_connection):
         """Test that DNS rebinding protection is disabled when allowed_hosts is empty."""
-        from mcp.server.fastmcp import FastMCP
-        from mcp.server.fastmcp.server import TransportSecuritySettings
+        from mcp.server.mcpserver import MCPServer
+        from mcp.server.transport_security import TransportSecuritySettings
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         # Simulate our server.py logic: empty allowed_hosts = disabled
-        test_mcp.settings.transport_security = TransportSecuritySettings(
+        security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False,
         )
 
         async def run_server():
-            await test_mcp.run_streamable_http_async()
+            await test_mcp.run_streamable_http_async(
+                host="127.0.0.1", port=free_port, transport_security=security
+            )
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 # Request with arbitrary Host header should succeed
                 response = await client.post(
                     f"http://127.0.0.1:{free_port}/mcp",
@@ -320,25 +322,27 @@ class TestDnsRebindingProtection:
         self, free_port, mock_db_connection
     ):
         """Test that enabled protection rejects requests with invalid Host header."""
-        from mcp.server.fastmcp import FastMCP
-        from mcp.server.fastmcp.server import TransportSecuritySettings
+        from mcp.server.mcpserver import MCPServer
+        from mcp.server.transport_security import TransportSecuritySettings
 
-        test_mcp = FastMCP("test_server", host="127.0.0.1", port=free_port)
+        test_mcp = MCPServer("test_server")
 
         # Enable protection with specific allowed hosts
-        test_mcp.settings.transport_security = TransportSecuritySettings(
+        security = TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=["localhost:*", "127.0.0.1:*"],
         )
 
         async def run_server():
-            await test_mcp.run_streamable_http_async()
+            await test_mcp.run_streamable_http_async(
+                host="127.0.0.1", port=free_port, transport_security=security
+            )
 
         server_task = asyncio.create_task(run_server())
         await asyncio.sleep(0.5)
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
+            async with httpx2.AsyncClient(trust_env=False) as client:
                 # Request with disallowed Host header should be rejected
                 response = await client.post(
                     f"http://127.0.0.1:{free_port}/mcp",
