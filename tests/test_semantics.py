@@ -390,6 +390,36 @@ async def test_search_reports_columns_the_view_lacks(app_state):
 
 
 @pytest.mark.asyncio
+async def test_every_search_outcome_shares_one_shape(app_state):
+    """A caller parses one schema whether the search worked or not."""
+    common = {
+        "query",
+        "terms",
+        "signal_type",
+        "available",
+        "matched_table_count",
+        "matches",
+    }
+
+    ok = json.loads(await server.search_table_semantics(query="redis memory"))
+
+    app_state.table_semantics = SemanticsView(
+        capability=Capability("unavailable", detail="Table not found")
+    )
+    unavailable = json.loads(await server.search_table_semantics(query="redis memory"))
+
+    failed = semantics.search_failure(
+        SearchRequest.parse("redis memory"), "error", "connection lost"
+    )
+
+    for payload in (ok, unavailable, failed):
+        assert common <= set(payload), sorted(common - set(payload))
+    assert ok["available"] is True
+    assert unavailable["available"] is False
+    assert failed["available"] is False
+
+
+@pytest.mark.asyncio
 async def test_search_reports_an_unavailable_view(app_state):
     app_state.table_semantics = SemanticsView(
         capability=Capability("unavailable", detail="Table not found")

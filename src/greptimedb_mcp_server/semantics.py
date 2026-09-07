@@ -191,6 +191,24 @@ def _recall_patterns(term: str) -> list[str]:
     return patterns
 
 
+def search_failure(request: SearchRequest, reason: str, detail: str | None) -> dict:
+    """The envelope every unsuccessful search returns.
+
+    Success and failure share query, terms, signal_type, available,
+    matched_table_count and matches, so one shape parses either.
+    """
+    return {
+        "query": request.query,
+        "terms": request.terms,
+        "signal_type": request.signal_type,
+        "available": False,
+        "reason": reason,
+        "error": detail,
+        "matched_table_count": 0,
+        "matches": [],
+    }
+
+
 def _parse_json_column(value, column: str, expected: type):
     """Decode a semantics JSON column, keeping the raw text when it is not usable.
 
@@ -516,14 +534,7 @@ class SemanticsView:
         """Rank tables in one schema by how many query terms they matched."""
         capability = self.negotiate(cursor)
         if not capability.available:
-            return {
-                "query": request.query,
-                "terms": request.terms,
-                "available": False,
-                "reason": capability.status,
-                "error": capability.detail,
-                "matches": [],
-            }
+            return search_failure(request, capability.status, capability.detail)
 
         # Unlike fetch(), a failure here has nothing to degrade to, so the
         # error propagates to the caller instead of becoming an empty result.

@@ -677,14 +677,7 @@ async def search_table_semantics(
         result = await asyncio.to_thread(_sync_search)
     except Error as e:
         logger.error(f"Error searching table semantics for '{query}': {e}")
-        # Same envelope as every other outcome, so a caller can parse one shape.
-        result = {
-            "query": query,
-            "available": False,
-            "reason": "error",
-            "error": str(e),
-            "matches": [],
-        }
+        result = semantics.search_failure(request, "error", str(e))
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 

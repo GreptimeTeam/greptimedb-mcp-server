@@ -94,7 +94,10 @@ jobs:
         expected="${{ matrix.version }}"
         expected="${expected#v}"
         for _ in $(seq 1 60); do
-          if curl -sf http://127.0.0.1:4000/status | grep -q "\"version\":\"$expected\""; then
+          # Parse rather than grep: a substring match on the JSON text breaks
+          # on whitespace the server is free to add.
+          if curl -sf http://127.0.0.1:4000/status \
+            | python3 -c "import json,sys; sys.exit(json.load(sys.stdin).get('version') != '$expected')"; then
             curl -s http://127.0.0.1:4000/status
             exit 0
           fi
