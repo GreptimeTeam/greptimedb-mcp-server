@@ -440,7 +440,15 @@ def _json_leaves(value) -> list[str]:
     return [str(value)] if value not in (None, "") else []
 
 
-def _searchable_text(values: dict) -> str:
+# The JSON columns a candidate carries, with the shape each must have and the
+# key its text goes under when it does not have it.
+CANDIDATE_JSON_COLUMNS = (
+    ("semantic_options", dict, "raw_options"),
+    ("entity_declarations", list, "raw_entity_declarations"),
+)
+
+
+def _searchable_text(values: dict, decoded: dict) -> str:
     """Assemble the text a candidate is ranked on.
 
     Only the values of the JSON columns take part. Their key names are the
@@ -449,20 +457,22 @@ def _searchable_text(values: dict) -> str:
     metric table and collapses the ordering to table name.
     """
     parts = [str(values["table_name"])] if values.get("table_name") else []
-    for column in ("semantic_options", "entity_declarations"):
-        raw = values.get(column)
-        if not raw:
-            continue
-        try:
-            parts.extend(_json_leaves(json.loads(raw)))
-        except (TypeError, json.JSONDecodeError):
+    for parsed, raw in decoded.values():
+        if parsed is not None:
+            parts.extend(_json_leaves(parsed))
+        elif raw:
             parts.append(str(raw))
     return " ".join(parts)
 
 
 def _candidate(values: dict, terms: list[str]) -> dict | None:
-    searchable = _searchable_text(values)
-    matched = _matched_terms(terms, searchable)
+    # Decoded once and shared: ranking reads the values, the payload carries
+    # them, and an unusable column falls back to its raw text in one place.
+    decoded = {
+        column: _parse_json_column(values.get(column), column, expected)[:2]
+        for column, expected, _ in CANDIDATE_JSON_COLUMNS
+    }
+    matched = _matched_terms(terms, _searchable_text(values, decoded))
     if not matched:
         # The SQL LIKE matched a substring the ranking rules reject, such as a
         # short term inside a longer word.
@@ -477,11 +487,8 @@ def _candidate(values: dict, terms: list[str]) -> dict | None:
         "metadata_quality": values.get("metadata_quality"),
         "matched_terms": matched,
     }
-    for column, expected, raw_key in (
-        ("semantic_options", dict, "raw_options"),
-        ("entity_declarations", list, "raw_entity_declarations"),
-    ):
-        parsed, raw, _ = _parse_json_column(values.get(column), column, expected)
+    for column, _, raw_key in CANDIDATE_JSON_COLUMNS:
+        parsed, raw = decoded[column]
         if parsed is not None:
             candidate[column] = parsed
         elif raw is not None:
