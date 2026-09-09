@@ -44,11 +44,14 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 | `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
 | `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
 | `search_table_semantics` | Find tables by observability concept, ranked by matched terms; searches table names, semantic options, and entity declarations |
+| `query_semantic_graph` | Query the semantic graph: `summary` (what it contains), `entities` (nodes), `relationships` (edges) over a required time window |
 | `describe_table` | Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance |
 | `explain_query` | Analyze SQL or TQL query execution plans (`analyze=true` for runtime stats; add `verbose=true` alongside `analyze=true` for per-partition scan metrics and index-pruning counters) |
 | `health_check` | Check database connection status and server version |
 
 `search_table_semantics` and the semantic metadata in `describe_table` read `information_schema.table_semantics`. A table appears there when it carries a `greptime.semantic.*` option or a built-in convention derives an entity declaration for it; other tables are absent. The server reads the view's column list once per process and selects only the columns it exposes. `entity_declarations` requires GreptimeDB 1.3; on earlier versions it is reported as a missing column rather than as an empty declaration set.
+
+`query_semantic_graph` reads `greptime_private.semantic_entities` and `greptime_private.semantic_relationships`, which require GreptimeDB 1.3. At startup the server checks that both views exist, carry the columns it reads, and are readable by the connected account; when they are not, the tool is not offered and the reason is logged. Its time window is required and half-open, `[start_time, end_time)` over `observed_at`, and rows are aggregated across the 60-second observation buckets in that window.
 
 ### Pipeline Management
 
