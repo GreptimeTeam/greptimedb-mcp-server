@@ -698,8 +698,13 @@ def _withdraw_graph_tool_if_unusable(state: AppState) -> None:
     place: a database that was briefly unreachable at startup is not evidence
     about the graph.
     """
+    probe_config = {
+        **state.db_config,
+        "connection_timeout": graph.PROBE_TIMEOUT_SECONDS,
+        "read_timeout": graph.PROBE_TIMEOUT_SECONDS,
+    }
     try:
-        with state.get_connection() as conn:
+        with connect(**probe_config) as conn:
             with conn.cursor() as cursor:
                 capability = state.semantic_graph.negotiate(cursor)
     except Error as e:
@@ -868,6 +873,13 @@ async def query_semantic_graph(
         with state.get_connection() as conn:
             with conn.cursor() as cursor:
                 capability = state.semantic_graph.negotiate(cursor)
+                if capability.status == "error":
+                    # A probe that could not run is a failure, the same as a
+                    # failed query; only a conclusive answer is a result.
+                    raise ToolError(
+                        f"Could not determine whether the semantic graph is "
+                        f"readable: {capability.detail}"
+                    )
                 if not capability.available:
                     return {
                         "view": request.view,

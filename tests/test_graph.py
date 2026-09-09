@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 import pytest
 from mysql.connector import Error
 
-from greptimedb_mcp_server import graph
+from mcp.server.mcpserver.exceptions import ToolError
+
+from greptimedb_mcp_server import graph, server
 from greptimedb_mcp_server.graph import (
     GraphCapability,
     GraphRequest,
@@ -308,3 +310,71 @@ def test_truncated_result_says_how_to_narrow():
 
     assert "rel_type" not in guidance["narrow_by"]
     assert "src_id" in guidance["narrow_by"]
+
+
+@pytest.fixture
+def app_state():
+    """Application state backed by the mocked MySQL connection."""
+    server._state = server.AppState(
+        db_config={
+            "host": "localhost",
+            "port": 4002,
+            "user": "",
+            "password": "",
+            "database": "testdb",
+            "time_zone": "",
+        },
+        pool_config={"pool_name": "greptimedb_pool", "pool_size": 5},
+        templates={},
+        http_base_url="http://localhost:4000",
+    )
+    yield server._state
+    server._state = None
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_could_not_run_raises(app_state):
+    """The same connection failure must not read as a result on one path and
+    a failure on another."""
+    app_state.semantic_graph = GraphView(
+        capability=GraphCapability("error", detail="2013: Lost connection")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.query_semantic_graph(
+            view="summary", start_time=START, end_time=END
+        )
+
+    assert "2013: Lost connection" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_a_conclusive_probe_still_answers(app_state):
+    """An absent graph is an answer, not a failure."""
+    app_state.semantic_graph = GraphView(
+        capability=GraphCapability("unavailable", detail="Table not found")
+    )
+
+    payload = json.loads(
+        await server.query_semantic_graph(
+            view="summary", start_time=START, end_time=END
+        )
+    )
+
+    assert payload["status"] == "unavailable"
+    assert payload["reason"] == "unavailable"
+
+
+def test_the_startup_probe_is_time_bounded(app_state, monkeypatch):
+    """It runs before the server can serve, so it cannot wait indefinitely."""
+    captured = {}
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        raise Error("refused")
+
+    monkeypatch.setattr(server, "connect", fake_connect)
+    server._withdraw_graph_tool_if_unusable(app_state)
+
+    assert captured["connection_timeout"] == graph.PROBE_TIMEOUT_SECONDS
+    assert captured["read_timeout"] == graph.PROBE_TIMEOUT_SECONDS
