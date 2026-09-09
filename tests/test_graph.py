@@ -239,3 +239,57 @@ def test_no_match_guidance_next_query_is_runnable():
 
     assert set(guidance["next_query"]) >= {"view", "start_time", "end_time"}
     GraphRequest.parse(**guidance["next_query"])
+
+
+def test_confidence_is_grouped_not_aggregated():
+    """A paired bucket and a client-only bucket measure different populations."""
+    cursor = FakeCursor(rows=[])
+    GraphView().relationships(cursor, request())
+
+    assert "MAX(confidence)" not in cursor.queries[0]
+    assert (
+        "GROUP BY src_type, src_id, dst_type, dst_id, rel_type, provenance, confidence"
+        in (cursor.queries[0])
+    )
+
+
+def test_sensitive_attributes_are_masked_by_name():
+    """The column-name rule that masks query results covers attribute maps."""
+    item = {
+        "entity_type": "service",
+        "entity_id": "checkout,hunter2",
+        "entity_id_attrs": {"service_name": "checkout", "api_key": "sk-live"},
+        "descriptive": {"team": "payments", "access_token": "t-123"},
+    }
+
+    masked = graph._mask_entity(item, graph.mask_patterns(True, None))
+
+    assert masked["entity_id_attrs"] == {
+        "service_name": "checkout",
+        "api_key": "******",
+    }
+    assert masked["descriptive"] == {"team": "payments", "access_token": "******"}
+    # the id is those values joined, so publishing it would undo the masking
+    assert masked["entity_id"] == "******"
+
+
+def test_masking_off_returns_attributes_untouched():
+    item = {"entity_id": "checkout", "entity_id_attrs": {"api_key": "sk-live"}}
+
+    assert graph._mask_entity(item, graph.mask_patterns(False, ["api_key"])) == item
+
+
+def test_custom_patterns_extend_the_defaults():
+    item = {"entity_id": "checkout", "entity_id_attrs": {"internal_ref": "r-1"}}
+
+    masked = graph._mask_entity(item, graph.mask_patterns(True, ["internal_ref"]))
+
+    assert masked["entity_id_attrs"]["internal_ref"] == "******"
+
+
+def test_truncated_result_says_how_to_narrow():
+    """There is no cursor, so the caller needs to know what to filter by."""
+    guidance = graph._truncation_guidance(request(rel_type="calls"))
+
+    assert "rel_type" not in guidance["narrow_by"]
+    assert "src_id" in guidance["narrow_by"]

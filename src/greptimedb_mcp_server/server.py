@@ -324,6 +324,9 @@ async def lifespan(mcp: MCPServer):
         mask_patterns=mask_patterns,
         allow_write=config.allow_write,
         http_session=aiohttp.ClientSession(),
+        semantic_graph=graph.GraphView(
+            mask=graph.mask_patterns(config.mask_enabled, mask_patterns)
+        ),
     )
 
     safe_db_config = {**db_config, "password": "***" if config.password else ""}
@@ -798,45 +801,44 @@ async def query_semantic_graph(
 ) -> str:
     """Query the semantic graph: which entities exist and which are related.
 
-    Start with view=summary. It returns each relationship type with the
-    endpoint type pairs it actually connects, so the shape of the graph is
-    known before any edge is read.
+    Use view=summary when the entity and relationship types in this graph are
+    not known yet; it reports them with the endpoint type pairs each
+    relationship connects. With a type or an id already in hand, query
+    entities or relationships directly.
 
     The window is required and half-open, [start_time, end_time), over
     observed_at -- the 60-second bucket an observation was recorded in. Rows
-    are aggregated across the buckets in the window, so one edge is one row and
-    request, error and duration fields are summed over it. The result echoes
-    the window it used.
+    are aggregated across the buckets in the window, and the result echoes the
+    window and the limit it used.
 
-    Ordering: only `calls` edges carry request, error and duration counts, so
-    an unfiltered result is ordered by relationship type and endpoint. Ordering
-    a mixed result by those counts would rank every other relationship type
-    below a null. Pass rel_type=calls to order by error and request count.
+    relationships returns one row per edge per confidence. The database reports
+    confidence 1.0 for a bucket whose client and server spans paired and 0.5
+    for one where only the client was seen, and it switches request_count,
+    error_count and the durations to whichever population that bucket
+    describes: paired requests timed by the server span, or unmatched clients
+    timed by their own. An edge observed both ways therefore comes back as two
+    rows. unmatched_count reports client spans with no paired server span.
+    Durations are in seconds.
 
-    confidence is derivation certainty, not health. A paired or declared edge
-    is 1.0; an edge whose callee was named by a client-side peer attribute
-    rather than observed is 0.5, and that endpoint is a virtual node. Read
-    provenance for how a row was obtained rather than inferring it from the
-    number.
+    entities returns one row per distinct set of attributes, so an entity whose
+    descriptive attributes changed inside the window appears more than once;
+    item_count counts rows, not entities. first_seen and last_seen bound where
+    the row was observed inside this window, not when the entity first existed.
 
-    request_count counts calls whose client and server spans paired.
-    unmatched_count counts client spans with no matching server span, and is
-    not additive with it: a fall in request_count with unmatched_count present
-    means the callee stopped answering, while a fall in both means the caller
-    stopped asking. error_count aggregates span status verbatim, and some SDKs
-    mark a normal long-lived stream timeout as an error, so read the errors
-    before concluding from a rate.
+    Ordering is by type and endpoint. Only `calls` edges carry request, error
+    and duration counts, so pass rel_type=calls to order by error and request
+    count instead. When complete is false, more rows matched than the limit and
+    later types may be absent entirely rather than merely cut short.
 
     A missing edge is not evidence that two entities are unrelated: it can also
     mean the call was not instrumented, was sampled out, or fell outside this
     window. Entities are not deduplicated across identity schemes, so one
-    process can appear under two ids if two sources named it differently --
-    compare their runs_on and part_of edges before treating them as two things.
+    process can appear under two ids if two sources named it differently.
 
     entity_id_attrs names the attributes an id was assembled from and
-    source_tables names the telemetry tables that witnessed it; query those for
-    the underlying rows. Identifiers from alerts and other tools are not graph
-    ids unless a query here returned that exact string.
+    source_tables names the telemetry tables that witnessed it. Identifiers
+    from alerts and other tools are not graph ids unless a query here returned
+    that exact string.
     """
     state = get_state()
     request = graph.GraphRequest.parse(
@@ -876,8 +878,10 @@ async def query_semantic_graph(
     try:
         result = await asyncio.to_thread(_sync_query)
     except Error as e:
+        # A failed read is not an empty graph: raising keeps `status=no_match`
+        # meaning "the query ran and matched nothing".
         logger.error(f"Error querying the semantic graph: {e}")
-        return f"Error querying the semantic graph: {str(e)}"
+        raise ToolError(f"Error querying the semantic graph: {str(e)}") from e
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 

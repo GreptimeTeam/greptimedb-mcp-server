@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 
 from mysql.connector import Error
 
+from greptimedb_mcp_server.masking import (
+    DEFAULT_SENSITIVE_PATTERNS,
+    MASK_PLACEHOLDER,
+    is_sensitive_column,
+)
+
 ENTITIES_VIEW = "greptime_private.semantic_entities"
 RELATIONSHIPS_VIEW = "greptime_private.semantic_relationships"
 
@@ -32,6 +38,12 @@ ENTITY_COLUMNS = (
 )
 ENTITY_REQUIRED_COLUMNS = frozenset({"observed_at", "fresh_until", *ENTITY_COLUMNS})
 
+# `confidence` is in the group key, not aggregated. The database reports 1.0
+# for a bucket that paired client and server spans and 0.5 for one that only
+# saw clients, and it switches request_count, error_count and the durations to
+# the matching population at the same time -- a pair is timed by the server
+# span, an unmatched client by its own. Summing across both would add two
+# different measurements and MAX(confidence) would hide that it happened.
 RELATIONSHIP_IDENTITY_COLUMNS = (
     "src_type",
     "src_id",
@@ -39,6 +51,7 @@ RELATIONSHIP_IDENTITY_COLUMNS = (
     "dst_id",
     "rel_type",
     "provenance",
+    "confidence",
 )
 # Summed over the buckets in the window.
 RED_COLUMNS = (
@@ -230,6 +243,45 @@ def _row_dict(columns: list[str], row) -> dict:
     return {name: _decode_json(name, value) for name, value in zip(columns, row)}
 
 
+# Attribute maps carry telemetry values keyed by the column they came from, so
+# the column-name rule that masks query results applies to them too.
+MASKABLE_ATTRIBUTE_COLUMNS = ("entity_id_attrs", "descriptive")
+
+
+def mask_patterns(mask_enabled: bool, extra: list[str] | None) -> list[str] | None:
+    """The pattern list to mask with, or None when masking is off."""
+    if not mask_enabled:
+        return None
+    return [*DEFAULT_SENSITIVE_PATTERNS, *(extra or [])]
+
+
+def _mask_entity(item: dict, patterns: list[str] | None) -> dict:
+    """Hide attribute values whose name matches a sensitive pattern.
+
+    `entity_id` is masked as well when it was assembled from one of them: it is
+    those values joined, so leaving it would publish what the map just hid.
+    That does make the entity unqueryable by id, which is what masking a column
+    does everywhere else in this server.
+    """
+    if not patterns:
+        return item
+    masked = dict(item)
+    for column in MASKABLE_ATTRIBUTE_COLUMNS:
+        value = masked.get(column)
+        if not isinstance(value, dict):
+            continue
+        masked[column] = {
+            name: (MASK_PLACEHOLDER if is_sensitive_column(name, patterns) else attr)
+            for name, attr in value.items()
+        }
+    identifying = masked.get("entity_id_attrs")
+    if isinstance(identifying, dict) and any(
+        is_sensitive_column(name, patterns) for name in identifying
+    ):
+        masked["entity_id"] = MASK_PLACEHOLDER
+    return masked
+
+
 def _filter_sql(filters: dict) -> tuple[list[str], list]:
     predicates = [f"{name} = %s" for name in filters]
     return predicates, list(filters.values())
@@ -265,11 +317,32 @@ def _no_match_guidance(request: GraphRequest) -> dict:
     }
 
 
+def _truncation_guidance(request: GraphRequest) -> dict:
+    """Say how to reach the rows the limit cut off.
+
+    There is no cursor. An unfiltered result is ordered by relationship type,
+    so a type with many edges can push later types out of the window entirely;
+    narrowing by type is what brings them back.
+    """
+    narrow = [name for name in RELATIONSHIP_FILTERS if name not in request.filters]
+    if request.view == "entities":
+        narrow = [name for name in ENTITY_FILTERS if name not in request.filters]
+    return {
+        "reason": (
+            f"More rows matched than the limit of {request.limit}. Ordering is "
+            "by type and endpoint, so kinds sorting later may be missing "
+            "entirely rather than merely cut short."
+        ),
+        "narrow_by": narrow,
+    }
+
+
 @dataclass
 class GraphView:
     """A handle on the two graph views that remembers whether they work."""
 
     capability: GraphCapability | None = field(default=None)
+    mask: list[str] | None = field(default=None)
 
     def negotiate(self, cursor) -> GraphCapability:
         """Decide once per process whether the graph is usable."""
@@ -358,6 +431,10 @@ class GraphView:
     def relationships(self, cursor, request: GraphRequest) -> dict:
         """List edges observed in the window, aggregated across buckets.
 
+        One edge yields one row per confidence, so an edge whose buckets were
+        partly paired and partly client-only comes back as two rows rather than
+        one sum over both populations.
+
         `attributes` is left out: it varies per observation, so grouping by it
         would split one edge into several rows and break the RED totals, while
         aggregating it would present one bucket's value as the edge's. Read it
@@ -370,7 +447,7 @@ class GraphView:
         where = " AND ".join(["observed_at >= %s", "observed_at < %s", *predicates])
         identity = ", ".join(RELATIONSHIP_IDENTITY_COLUMNS)
         cursor.execute(
-            f"SELECT {identity}, MAX(confidence) AS confidence, "
+            f"SELECT {identity}, "
             + ", ".join(aggregates)
             + ", MIN(observed_at) AS first_seen, MAX(observed_at) AS last_seen"
             + ", MAX(fresh_until) AS fresh_until"
@@ -386,18 +463,24 @@ class GraphView:
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         complete = len(rows) <= request.limit
-        items = [_row_dict(columns, row) for row in rows[: request.limit]]
+        items = [
+            _mask_entity(_row_dict(columns, row), self.mask)
+            for row in rows[: request.limit]
+        ]
         result = {
             "view": request.view,
             "status": "ok" if items else "no_match",
             "window": request.window.describe(),
             "applied_filters": dict(request.filters),
+            "limit": request.limit,
             "items": items,
             "item_count": len(items),
             "complete": complete,
         }
         if not items:
             result["guidance"] = _no_match_guidance(request)
+        elif not complete:
+            result["guidance"] = _truncation_guidance(request)
         return result
 
 

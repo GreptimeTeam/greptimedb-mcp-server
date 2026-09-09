@@ -32,10 +32,10 @@ DECLARED_EDGES_TABLE = "greptime_private.semantic_relationships_declared"
 # Declared edges are inserted directly, so the graph has both a RED-bearing
 # relationship type and one without needing OTLP traces to pair up.
 GRAPH_EDGES = (
-    ("service", "it-frontend", "service", "it-checkout", "calls", 100, 7),
-    ("service", "it-checkout", "service", "it-payment", "calls", 100, 45),
-    ("service", "it-checkout", "k8s.pod", "it-pod-a", "runs_on", None, None),
-    ("k8s.pod", "it-pod-a", "k8s.node", "it-node-1", "runs_on", None, None),
+    ("service", "it-frontend", "service", "it-checkout", "calls", 100, 7, 1.0, ""),
+    ("service", "it-checkout", "service", "it-payment", "calls", 100, 45, 1.0, ""),
+    ("service", "it-checkout", "k8s.pod", "it-pod-a", "runs_on", None, None, 1.0, ""),
+    ("k8s.pod", "it-pod-a", "k8s.node", "it-node-1", "runs_on", None, None, 1.0, ""),
 )
 
 METRIC_HOSTS = ("host-a", "host-b")
@@ -164,19 +164,12 @@ def _seed_declared_edges(cursor) -> bool:
         "scope, generation_id, confidence, request_count, error_count"
     )
     try:
-        for (
-            src_type,
-            src_id,
-            dst_type,
-            dst_id,
-            rel_type,
-            requests,
-            errors,
-        ) in GRAPH_EDGES:
+        for edge in GRAPH_EDGES:
+            src, sid, dst, did, rel, requests, errors, confidence, scope = edge
             cursor.execute(
                 f"INSERT INTO {DECLARED_EDGES_TABLE} ({columns}) VALUES "
-                "(now(), %s, %s, %s, %s, %s, 'declared', '', '', 1.0, %s, %s)",
-                (src_type, src_id, dst_type, dst_id, rel_type, requests, errors),
+                "(now(), %s, %s, %s, %s, %s, 'declared', %s, '', %s, %s, %s)",
+                (src, sid, dst, did, rel, scope, confidence, requests, errors),
             )
     except mysql.connector.Error:
         return False
