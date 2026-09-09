@@ -1,5 +1,6 @@
 """Tests for the semantic graph window, ordering, and capability contracts."""
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -291,6 +292,26 @@ def test_sensitive_attributes_are_masked_by_name():
     assert masked["descriptive"] == {"team": "payments", "access_token": "******"}
     # the id is those values joined, so publishing it would undo the masking
     assert masked["entity_id"] == "******"
+
+
+def test_adding_a_pattern_never_exposes_what_a_narrower_one_hid():
+    """Masking must be monotonic: more patterns can only hide more.
+
+    The id is decided from the original row, so hiding the whole attribute map
+    does not stop it from being recognised as the source of the id.
+    """
+    item = {
+        "entity_id": "checkout,sk-live",
+        "entity_id_attrs": {"service_name": "checkout", "api_key": "sk-live"},
+    }
+
+    exposed = set()
+    for extra in (None, ["entity_id_attrs"], ["entity_id"], ["service_name"]):
+        masked = graph._mask_item(item, graph.mask_patterns(True, extra))
+        assert masked["entity_id"] == "******", extra
+        exposed.add(json.dumps(masked, sort_keys=True).count("sk-live"))
+
+    assert exposed == {0}
 
 
 def test_masking_off_returns_attributes_untouched():

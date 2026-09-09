@@ -272,6 +272,11 @@ def _mask_item(item: dict, patterns: list[str] | None) -> dict:
     if not patterns:
         return item
 
+    # Decided from the original row: reading it back after masking would miss
+    # the case where the whole map was hidden, and adding a pattern would then
+    # expose an id that a narrower rule had hidden.
+    hide_id = _identity_is_sensitive(item, patterns)
+
     masked = {
         name: (MASK_PLACEHOLDER if is_sensitive_column(name, patterns) else value)
         for name, value in item.items()
@@ -284,12 +289,19 @@ def _mask_item(item: dict, patterns: list[str] | None) -> dict:
             name: (MASK_PLACEHOLDER if is_sensitive_column(name, patterns) else attr)
             for name, attr in value.items()
         }
-    identifying = masked.get("entity_id_attrs")
-    if isinstance(identifying, dict) and any(
-        is_sensitive_column(name, patterns) for name in identifying
-    ):
+    if hide_id:
         masked["entity_id"] = MASK_PLACEHOLDER
     return masked
+
+
+def _identity_is_sensitive(item: dict, patterns: list[str]) -> bool:
+    """Whether `entity_id` was assembled from anything the patterns hide."""
+    attrs = item.get("entity_id_attrs")
+    if not isinstance(attrs, dict):
+        return False
+    if is_sensitive_column("entity_id_attrs", patterns):
+        return True
+    return any(is_sensitive_column(name, patterns) for name in attrs)
 
 
 def _filter_sql(filters: dict) -> tuple[list[str], list]:
