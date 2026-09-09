@@ -38,12 +38,10 @@ ENTITY_COLUMNS = (
 )
 ENTITY_REQUIRED_COLUMNS = frozenset({"observed_at", "fresh_until", *ENTITY_COLUMNS})
 
-# `confidence` is in the group key, not aggregated. The database reports 1.0
-# for a bucket that paired client and server spans and 0.5 for one that only
-# saw clients, and it switches request_count, error_count and the durations to
-# the matching population at the same time -- a pair is timed by the server
-# span, an unmatched client by its own. Summing across both would add two
-# different measurements and MAX(confidence) would hide that it happened.
+# `confidence` is in the group key, not aggregated: the database reports 1.0
+# for a bucket whose spans paired and 0.5 for one that saw only clients, and it
+# switches the counts and durations to that population at the same time.
+# Summing across both would add two different measurements.
 RELATIONSHIP_IDENTITY_COLUMNS = (
     "src_type",
     "src_id",
@@ -53,7 +51,6 @@ RELATIONSHIP_IDENTITY_COLUMNS = (
     "provenance",
     "confidence",
 )
-# Summed over the buckets in the window.
 RED_COLUMNS = (
     "request_count",
     "unmatched_count",
@@ -97,7 +94,6 @@ ID_FILTERS = ("entity_id", "src_id", "dst_id")
 MAX_LIMIT = 500
 DEFAULT_LIMIT = 100
 
-OBSERVATION_BUCKET_SECONDS = 60
 
 ERRNO_TABLE_NOT_FOUND = 1146
 ERRNO_PERMISSION_DENIED = frozenset({1044, 1045, 1142, 1143, 1227})
@@ -108,8 +104,6 @@ class GraphCapability:
     """Whether the graph can be read, and why not when it cannot."""
 
     status: str
-    entity_columns: frozenset[str] = frozenset()
-    relationship_columns: frozenset[str] = frozenset()
     detail: str | None = None
 
     @property
@@ -157,13 +151,7 @@ class TimeWindow:
         return [self.start.isoformat(), self.end.isoformat()]
 
     def describe(self) -> dict:
-        return {
-            "start": self.start.isoformat(),
-            "end": self.end.isoformat(),
-            "bounds": "[start, end)",
-            "time_field": "observed_at",
-            "observation_bucket_seconds": OBSERVATION_BUCKET_SECONDS,
-        }
+        return {"start": self.start.isoformat(), "end": self.end.isoformat()}
 
 
 def _parse_timestamp(value: str, name: str) -> datetime:
@@ -225,10 +213,6 @@ class GraphRequest:
             limit=max(1, min(limit, MAX_LIMIT)),
         )
 
-    @property
-    def names_an_id(self) -> bool:
-        return any(name in ID_FILTERS for name in self.filters)
-
 
 def _decode_json(name: str, value):
     if name not in JSON_COLUMNS or not isinstance(value, str) or not value:
@@ -258,23 +242,17 @@ def mask_patterns(mask_enabled: bool, extra: list[str] | None) -> list[str] | No
 def _mask_item(item: dict, patterns: list[str] | None) -> dict:
     """Apply the column-name masking rule to one returned row.
 
-    A returned field whose own name matches a pattern is hidden outright, as
-    the column would be through execute_sql. Attribute maps that survive that
-    are then masked by the names inside them, since those names are the columns
-    the values came from.
-
-    `entity_id` is hidden as well when it was assembled from a masked
-    attribute, because it is those values joined. That does not reach
-    `relationships`: its view carries no attribute names, so the same value can
-    still surface there as `src_id` or `dst_id` unless a pattern matches those
-    column names.
+    A field whose own name matches is hidden, as the column would be through
+    execute_sql; surviving attribute maps are then masked by the names inside
+    them. `entity_id` goes too when a masked attribute built it. That last part
+    cannot reach `relationships`, whose view carries no attribute names, so the
+    value can still surface there as `src_id` or `dst_id`.
     """
     if not patterns:
         return item
 
-    # Decided from the original row: reading it back after masking would miss
-    # the case where the whole map was hidden, and adding a pattern would then
-    # expose an id that a narrower rule had hidden.
+    # From the original row: read back after masking, a wholly hidden map no
+    # longer looks like one, and adding a pattern would expose the id.
     hide_id = _identity_is_sensitive(item, patterns)
 
     masked = {
@@ -315,13 +293,12 @@ def _no_match_guidance(request: GraphRequest) -> dict:
     An unfiltered read of a large graph is the failure this tool exists to
     avoid, so the suggestion drops the identifier and keeps the type filters.
     """
-    # The window is a required argument, so a next_query without it would not
-    # run.
+    # next_query has to carry the window: it is a required argument.
     window = {
         "start_time": request.window.start.isoformat(),
         "end_time": request.window.end.isoformat(),
     }
-    if request.names_an_id:
+    if any(name in ID_FILTERS for name in request.filters):
         kept = {k: v for k, v in request.filters.items() if k not in ID_FILTERS}
         return {
             "reason": (
@@ -389,9 +366,6 @@ class GraphView:
             "window": window.describe(),
             "entity_types": entity_types,
             "relationship_types": relationship_types,
-            "entity_count": sum(item["count"] for item in entity_types),
-            "relationship_count": sum(item["count"] for item in relationship_types),
-            "complete": True,
         }
 
     def _entity_types(self, cursor, window: TimeWindow) -> list[dict]:
@@ -548,11 +522,7 @@ def _probe(cursor) -> GraphCapability:
         except Error as e:
             return _classify(e)
 
-    return GraphCapability(
-        "available",
-        entity_columns=columns[ENTITIES_VIEW],
-        relationship_columns=columns[RELATIONSHIPS_VIEW],
-    )
+    return GraphCapability("available")
 
 
 def _classify(error: Error) -> GraphCapability:

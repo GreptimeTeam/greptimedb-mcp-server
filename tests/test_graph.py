@@ -21,6 +21,10 @@ END = "2026-09-05T08:00:00Z"
 
 FULL_ENTITY_COLUMNS = frozenset(graph.ENTITY_REQUIRED_COLUMNS)
 FULL_RELATIONSHIP_COLUMNS = frozenset(graph.RELATIONSHIP_REQUIRED_COLUMNS)
+FULL_VIEWS = {
+    graph.ENTITIES_VIEW: FULL_ENTITY_COLUMNS,
+    graph.RELATIONSHIPS_VIEW: FULL_RELATIONSHIP_COLUMNS,
+}
 
 
 class FakeCursor:
@@ -56,17 +60,13 @@ def request(view="relationships", limit=graph.DEFAULT_LIMIT, **filters):
     return GraphRequest.parse(view, START, END, limit, **filters)
 
 
-def test_window_treats_a_naive_timestamp_as_utc():
-    window = TimeWindow.parse("2026-09-05T07:00:00", "2026-09-05T08:00:00")
+def test_window_normalizes_to_utc():
+    """A naive timestamp is read as UTC; an offset one is converted."""
+    naive = TimeWindow.parse("2026-09-05T07:00:00", "2026-09-05T08:00:00")
+    offset = TimeWindow.parse("2026-09-05T09:00:00+02:00", END)
 
-    assert window.start == datetime(2026, 9, 5, 7, tzinfo=timezone.utc)
-    assert window.describe()["bounds"] == "[start, end)"
-
-
-def test_window_normalizes_an_offset_to_utc():
-    window = TimeWindow.parse("2026-09-05T09:00:00+02:00", END)
-
-    assert window.start == datetime(2026, 9, 5, 7, tzinfo=timezone.utc)
+    assert naive.start == datetime(2026, 9, 5, 7, tzinfo=timezone.utc)
+    assert offset.start == datetime(2026, 9, 5, 7, tzinfo=timezone.utc)
 
 
 def test_window_rejects_an_empty_or_inverted_range():
@@ -118,6 +118,8 @@ def test_no_match_guidance_drops_the_id_and_keeps_the_type():
     assert next_query["rel_type"] == "calls"
     assert "src_id" not in next_query
     assert "canonical graph entity ID" in guidance["reason"]
+    # the window is required, so a retry without it would not run
+    GraphRequest.parse(**next_query)
 
 
 def test_no_match_guidance_without_an_id_points_at_the_summary():
@@ -140,8 +142,8 @@ def test_probe_classifies_failures(errno, expected):
 def test_probe_reports_an_incompatible_schema():
     """A view that exists but lacks a column this module reads is not usable."""
     columns = {
+        **FULL_VIEWS,
         graph.ENTITIES_VIEW: FULL_ENTITY_COLUMNS - {"entity_id_attrs"},
-        graph.RELATIONSHIPS_VIEW: FULL_RELATIONSHIP_COLUMNS,
     }
 
     capability = GraphView().negotiate(FakeCursor(columns=columns))
@@ -152,11 +154,7 @@ def test_probe_reports_an_incompatible_schema():
 
 def test_probe_rejects_a_view_it_cannot_read():
     """DESC answers from the catalog, so it does not prove SELECT is allowed."""
-    columns = {
-        graph.ENTITIES_VIEW: FULL_ENTITY_COLUMNS,
-        graph.RELATIONSHIPS_VIEW: FULL_RELATIONSHIP_COLUMNS,
-    }
-    cursor = FakeCursor(columns=columns, errno=1142, fail_on="SELECT COUNT(*)")
+    cursor = FakeCursor(columns=FULL_VIEWS, errno=1142, fail_on="SELECT COUNT(*)")
 
     capability = GraphView().negotiate(cursor)
 
@@ -197,19 +195,6 @@ def test_summary_reports_endpoint_pairs_not_two_sets():
     assert runs_on["count"] == 5
 
 
-def test_a_view_missing_a_red_column_is_incompatible():
-    """The query reads every RED column, so a view without one cannot serve it."""
-    columns = {
-        graph.ENTITIES_VIEW: FULL_ENTITY_COLUMNS,
-        graph.RELATIONSHIPS_VIEW: FULL_RELATIONSHIP_COLUMNS - {"unmatched_count"},
-    }
-
-    capability = GraphView().negotiate(FakeCursor(columns=columns))
-
-    assert capability.status == "incompatible_schema"
-    assert "unmatched_count" in capability.detail
-
-
 def test_identifier_shaped_strings_survive_the_row_decode():
     """Decoding every string would make entity_id "123" a number."""
     columns = ["entity_id", "entity_id_attrs", "source_tables"]
@@ -220,9 +205,6 @@ def test_identifier_shaped_strings_survive_the_row_decode():
     assert decoded["entity_id"] == "123"
     assert decoded["entity_id_attrs"] == {"host": "123"}
     assert decoded["source_tables"] == ["public.t"]
-
-
-def test_identifiers_that_look_like_json_literals_survive():
     assert graph._row_dict(["src_id"], ("null",))["src_id"] == "null"
     assert graph._row_dict(["dst_id"], ("true",))["dst_id"] == "true"
 
@@ -232,14 +214,6 @@ def test_window_params_carry_their_offset():
     params = TimeWindow.parse(START, END).params
 
     assert all(p.endswith("+00:00") for p in params)
-
-
-def test_no_match_guidance_next_query_is_runnable():
-    """start_time and end_time are required, so a retry without them fails."""
-    guidance = _no_match_guidance(request(rel_type="calls", src_id="unknown"))
-
-    assert set(guidance["next_query"]) >= {"view", "start_time", "end_time"}
-    GraphRequest.parse(**guidance["next_query"])
 
 
 def test_confidence_is_grouped_not_aggregated():

@@ -391,7 +391,8 @@ async def test_graph_window_is_read_in_utc_whatever_the_session(seed):
             )
         )
 
-    assert payload["relationship_count"] == len(GRAPH_EDGES)
+    edges = sum(item["count"] for item in payload["relationship_types"])
+    assert edges == len(GRAPH_EDGES)
 
 
 async def test_graph_returns_identifiers_verbatim(seed):
