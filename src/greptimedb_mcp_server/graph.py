@@ -322,6 +322,35 @@ def _no_match_guidance(request: GraphRequest) -> dict:
     }
 
 
+def unavailable_result(request: GraphRequest, capability: GraphCapability) -> dict:
+    """What a view returns when the graph cannot be read.
+
+    Shaped like that view's successful answer with no data in it, so a caller
+    parses one shape per view rather than two.
+    """
+    result = {
+        "view": request.view,
+        "status": "unavailable",
+        "reason": capability.status,
+        "error": capability.detail,
+        "window": request.window.describe(),
+    }
+    if request.view == "summary":
+        result["entity_types"] = []
+        result["relationship_types"] = []
+        return result
+    result.update(
+        {
+            "applied_filters": dict(request.filters),
+            "limit": request.limit,
+            "items": [],
+            "item_count": 0,
+            "complete": True,
+        }
+    )
+    return result
+
+
 def _truncation_guidance(request: GraphRequest) -> dict:
     """Say how to reach the rows the limit cut off.
 
@@ -365,13 +394,12 @@ class GraphView:
         interface fact, and learning it by paging through edges both costs a
         round trip and invites reading the result as a service call graph.
         """
-        entity_types = self._entity_types(cursor, window)
-        relationship_types = self._relationship_types(cursor, window)
         return {
             "view": "summary",
+            "status": "ok",
             "window": window.describe(),
-            "entity_types": entity_types,
-            "relationship_types": relationship_types,
+            "entity_types": self._entity_types(cursor, window),
+            "relationship_types": self._relationship_types(cursor, window),
         }
 
     def _entity_types(self, cursor, window: TimeWindow) -> list[dict]:

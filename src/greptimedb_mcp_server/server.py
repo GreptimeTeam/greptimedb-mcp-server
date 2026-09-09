@@ -881,13 +881,7 @@ async def query_semantic_graph(
                         f"readable: {capability.detail}"
                     )
                 if not capability.available:
-                    return {
-                        "view": request.view,
-                        "status": "unavailable",
-                        "reason": capability.status,
-                        "error": capability.detail,
-                        "items": [],
-                    }
+                    return graph.unavailable_result(request, capability)
                 if request.view == "summary":
                     return state.semantic_graph.summary(cursor, request.window)
                 if request.view == "entities":

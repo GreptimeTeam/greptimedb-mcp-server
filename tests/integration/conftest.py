@@ -150,9 +150,12 @@ def seed(db):
         # Delete only the seeded edges: the table is shared and this suite did
         # not create it.
         for edge in GRAPH_EDGES:
+            src, sid, dst, did, rel = edge[:5]
             cursor.execute(
-                f"DELETE FROM {DECLARED_EDGES_TABLE} WHERE src_id = %s AND dst_id = %s",
-                (edge[1], edge[3]),
+                f"DELETE FROM {DECLARED_EDGES_TABLE} WHERE src_type = %s AND "
+                "src_id = %s AND dst_type = %s AND dst_id = %s AND rel_type = %s "
+                "AND provenance = 'declared'",
+                (src, sid, dst, did, rel),
             )
     db.commit()
 

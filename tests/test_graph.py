@@ -348,21 +348,29 @@ async def test_a_probe_that_could_not_run_raises(app_state):
     assert "2013: Lost connection" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    "view,expected",
+    [
+        ("summary", {"entity_types", "relationship_types"}),
+        ("relationships", {"applied_filters", "limit", "items", "item_count"}),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_conclusive_probe_still_answers(app_state):
-    """An absent graph is an answer, not a failure."""
+async def test_a_conclusive_probe_answers_in_the_views_own_shape(
+    app_state, view, expected
+):
+    """An absent graph is an answer, and it looks like that view's answer."""
     app_state.semantic_graph = GraphView(
-        capability=GraphCapability("unavailable", detail="Table not found")
+        capability=GraphCapability("permission_denied", detail="denied")
     )
 
     payload = json.loads(
-        await server.query_semantic_graph(
-            view="summary", start_time=START, end_time=END
-        )
+        await server.query_semantic_graph(view=view, start_time=START, end_time=END)
     )
 
     assert payload["status"] == "unavailable"
-    assert payload["reason"] == "unavailable"
+    assert payload["reason"] == "permission_denied"
+    assert {"view", "status", "window"} | expected <= set(payload)
 
 
 def test_the_startup_probe_is_time_bounded(app_state, monkeypatch):
