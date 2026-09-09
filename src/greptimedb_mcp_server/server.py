@@ -839,6 +839,13 @@ async def query_semantic_graph(
     source_tables names the telemetry tables that witnessed it. Identifiers
     from alerts and other tools are not graph ids unless a query here returned
     that exact string.
+
+    When masking is on, a returned field is hidden if its own name matches a
+    sensitive pattern, and an attribute map is also masked by the names inside
+    it. entities additionally hides entity_id when a masked attribute helped
+    build it; relationships cannot do the same, because its view does not carry
+    attribute names, so such a value can still appear there as src_id or
+    dst_id.
     """
     state = get_state()
     request = graph.GraphRequest.parse(

@@ -255,17 +255,27 @@ def mask_patterns(mask_enabled: bool, extra: list[str] | None) -> list[str] | No
     return [*DEFAULT_SENSITIVE_PATTERNS, *(extra or [])]
 
 
-def _mask_entity(item: dict, patterns: list[str] | None) -> dict:
-    """Hide attribute values whose name matches a sensitive pattern.
+def _mask_item(item: dict, patterns: list[str] | None) -> dict:
+    """Apply the column-name masking rule to one returned row.
 
-    `entity_id` is masked as well when it was assembled from one of them: it is
-    those values joined, so leaving it would publish what the map just hid.
-    That does make the entity unqueryable by id, which is what masking a column
-    does everywhere else in this server.
+    A returned field whose own name matches a pattern is hidden outright, as
+    the column would be through execute_sql. Attribute maps that survive that
+    are then masked by the names inside them, since those names are the columns
+    the values came from.
+
+    `entity_id` is hidden as well when it was assembled from a masked
+    attribute, because it is those values joined. That does not reach
+    `relationships`: its view carries no attribute names, so the same value can
+    still surface there as `src_id` or `dst_id` unless a pattern matches those
+    column names.
     """
     if not patterns:
         return item
-    masked = dict(item)
+
+    masked = {
+        name: (MASK_PLACEHOLDER if is_sensitive_column(name, patterns) else value)
+        for name, value in item.items()
+    }
     for column in MASKABLE_ATTRIBUTE_COLUMNS:
         value = masked.get(column)
         if not isinstance(value, dict):
@@ -329,9 +339,9 @@ def _truncation_guidance(request: GraphRequest) -> dict:
         narrow = [name for name in ENTITY_FILTERS if name not in request.filters]
     return {
         "reason": (
-            f"More rows matched than the limit of {request.limit}. Ordering is "
-            "by type and endpoint, so kinds sorting later may be missing "
-            "entirely rather than merely cut short."
+            f"More rows matched than the limit of {request.limit}, so rows "
+            "sorting later are missing entirely rather than merely cut short. "
+            "Narrow with the filters below."
         ),
         "narrow_by": narrow,
     }
@@ -464,7 +474,7 @@ class GraphView:
         rows = cursor.fetchall()
         complete = len(rows) <= request.limit
         items = [
-            _mask_entity(_row_dict(columns, row), self.mask)
+            _mask_item(_row_dict(columns, row), self.mask)
             for row in rows[: request.limit]
         ]
         result = {

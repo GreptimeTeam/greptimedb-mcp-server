@@ -253,8 +253,28 @@ def test_confidence_is_grouped_not_aggregated():
     )
 
 
+def test_a_matching_column_name_hides_the_whole_field():
+    """The same rule execute_sql applies to a column applies to a field."""
+    item = {"entity_type": "service", "descriptive": {"team": "payments"}}
+
+    masked = graph._mask_item(item, graph.mask_patterns(True, ["descriptive"]))
+
+    assert masked["descriptive"] == "******"
+    assert masked["entity_type"] == "service"
+
+
+def test_endpoint_ids_are_hidden_when_the_pattern_names_them():
+    """relationships has no attribute names, so the column rule is all it has."""
+    item = {"src_id": "checkout", "dst_id": "payment", "rel_type": "calls"}
+
+    masked = graph._mask_item(item, graph.mask_patterns(True, ["src_id"]))
+
+    assert masked["src_id"] == "******"
+    assert masked["dst_id"] == "payment"
+
+
 def test_sensitive_attributes_are_masked_by_name():
-    """The column-name rule that masks query results covers attribute maps."""
+    """The column-name rule reaches inside attribute maps too."""
     item = {
         "entity_type": "service",
         "entity_id": "checkout,hunter2",
@@ -262,7 +282,7 @@ def test_sensitive_attributes_are_masked_by_name():
         "descriptive": {"team": "payments", "access_token": "t-123"},
     }
 
-    masked = graph._mask_entity(item, graph.mask_patterns(True, None))
+    masked = graph._mask_item(item, graph.mask_patterns(True, None))
 
     assert masked["entity_id_attrs"] == {
         "service_name": "checkout",
@@ -276,13 +296,13 @@ def test_sensitive_attributes_are_masked_by_name():
 def test_masking_off_returns_attributes_untouched():
     item = {"entity_id": "checkout", "entity_id_attrs": {"api_key": "sk-live"}}
 
-    assert graph._mask_entity(item, graph.mask_patterns(False, ["api_key"])) == item
+    assert graph._mask_item(item, graph.mask_patterns(False, ["api_key"])) == item
 
 
 def test_custom_patterns_extend_the_defaults():
     item = {"entity_id": "checkout", "entity_id_attrs": {"internal_ref": "r-1"}}
 
-    masked = graph._mask_entity(item, graph.mask_patterns(True, ["internal_ref"]))
+    masked = graph._mask_item(item, graph.mask_patterns(True, ["internal_ref"]))
 
     assert masked["entity_id_attrs"]["internal_ref"] == "******"
 
