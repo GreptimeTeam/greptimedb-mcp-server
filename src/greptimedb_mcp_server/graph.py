@@ -99,7 +99,7 @@ DEFAULT_LIMIT = 100
 # server can serve anything, and a database that accepts the connection but
 # never answers would otherwise hold initialisation open indefinitely. A
 # timeout surfaces as an error, which is inconclusive, so the tool stays.
-PROBE_TIMEOUT_SECONDS = 5
+PROBE_TIMEOUT_SECONDS = 10
 
 ERRNO_TABLE_NOT_FOUND = 1146
 ERRNO_PERMISSION_DENIED = frozenset({1044, 1045, 1142, 1143, 1227})
