@@ -11,6 +11,8 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 - `execute_sql`: Run SQL queries (SELECT, SHOW, DESCRIBE only - read-only access)
 - `execute_tql`: Run PromQL-compatible time-series queries
 - `query_range`: Time-window aggregation with RANGE/ALIGN syntax
+- `search_table_semantics`: Find tables by observability concept when the table name is unknown; searches schema metadata only, not row values
+- `query_semantic_graph`: Query the semantic graph over a required time window: `summary` (which entity and relationship types exist), `entities` (nodes), `relationships` (edges). Not offered when the server's GreptimeDB has no semantic graph
 - `describe_table`: Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance
 - `health_check`: Check database connection status
 - `explain_query`: Analyze query execution plans (`analyze=true` for runtime stats; add `verbose=true` alongside `analyze=true` for per-partition scan metrics and index-pruning counters)
@@ -45,9 +47,11 @@ Use these prompts for specialized tasks:
 1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `dryrun_pipeline` to verify → `create_pipeline`
 2. For dashboard creation: Prepare Perses JSON definition → `create_dashboard` → verify with `list_dashboards`
 3. For data analysis: `describe_table` first → understand schema, semantics, and sample rows → `execute_sql` or `execute_tql`
-4. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
-5. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
-6. Always check `health_check` if queries fail unexpectedly
+4. When the right table is unknown: `search_table_semantics` with concept words → query the candidates' data directly, rather than describing each one
+5. For service topology and entity relationships: `query_semantic_graph` with `view=summary` first when the types in the graph are unknown, then `entities` or `relationships`
+6. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
+7. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
+8. Always check `health_check` if queries fail unexpectedly
 ```
 
 ## Using Prompts in Claude Desktop
