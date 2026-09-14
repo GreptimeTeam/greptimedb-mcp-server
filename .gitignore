@@ -27,3 +27,6 @@ uv.lock
 
 .envrc
 .tma1-context.md
+
+# mcp-publisher credentials
+.mcpregistry_*_token
