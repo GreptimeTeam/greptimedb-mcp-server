@@ -40,6 +40,7 @@ DESCRIBE {{ table }};
 SHOW CREATE TABLE {{ table }};
 {% else %}
 -- Identify the table first, then run DESCRIBE and SHOW CREATE TABLE.
+-- search_table_semantics("<concept>") narrows a wide schema faster.
 SHOW TABLES;
 {% endif %}
 ```
@@ -84,6 +85,7 @@ Useful runtime metrics:
 
 ## References
 
+- [Skill: greptimedb-performance-diagnosis](https://docs.greptime.com/skills/greptimedb-performance-diagnosis/SKILL.md) - Find the bottleneck behind a slow query; fetch and follow it for depth beyond this prompt
 - [EXPLAIN Query](https://docs.greptime.com/reference/sql/explain)
 - [RANGE Query](https://docs.greptime.com/reference/sql/range)
 - [TQL Reference](https://docs.greptime.com/reference/sql/tql)

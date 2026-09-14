@@ -52,6 +52,16 @@ schema that matches real query patterns over a generic wide-table design.
     index at the storage layer.
 12. If partitioning is needed, choose stable, evenly distributed keys that also
     appear in common query filters.
+13. Quote any column name that is a SQL keyword. `CREATE TABLE` rejects an
+    unquoted one, and the list is the parser's full keyword set, so ordinary
+    names are in it: `value`, `level`, `status`, `name`, `type`, `source`,
+    `service`, `timestamp`, `start`, `end`, `size`, `count`, `key`, `user`,
+    `text`, `data`, `format`, `version`, `path`, `tag`, `role`, `method`,
+    `result`, `region`, `zone`, `language`, `comment`, `password`, `location`,
+    `period`, `filter`, `position`, `precision`, `operator`. Write them as
+    `` `level` STRING ``. Only `CREATE TABLE` is affected: queries,
+    `ALTER TABLE ADD COLUMN`, and pipeline-created columns take the same names
+    unquoted.
 
 ## Suggested Output
 
@@ -84,6 +94,7 @@ GROUP BY i.index_type, i.target_json;
 
 ## References
 
+- [Skill: greptimedb-table-design](https://docs.greptime.com/skills/greptimedb-table-design/SKILL.md) - Table schemas, primary keys, indexes, partitioning; fetch and follow it for depth beyond this prompt
 - [Data Model](https://docs.greptime.com/user-guide/concepts/data-model)
 - [CREATE TABLE](https://docs.greptime.com/reference/sql/create)
 - [Data Index](https://docs.greptime.com/user-guide/manage-data/data-index)

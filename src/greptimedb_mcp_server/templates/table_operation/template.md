@@ -10,12 +10,6 @@ When `{{ table }}` is schema-qualified, INFORMATION_SCHEMA filters below match o
 `table_name` plus `table_schema`; `DESCRIBE` and `SHOW CREATE TABLE` accept the
 qualified name directly.
 
-## Available Tools
-
-- `describe_table` - Inspect table profile: schema, semantic metadata, sample rows
-- `explain_query` - Analyze query execution plan (set `analyze=true` for runtime stats; add `verbose=true` together with `analyze=true` for per-partition scan metrics and index-pruning counters)
-- `execute_sql` - Run diagnostic SQL queries
-
 ## Schema Analysis
 
 ```sql
@@ -24,11 +18,6 @@ qualified name directly.
 
 -- Full DDL
 SHOW CREATE TABLE {{ table }};
-
--- Table semantic metadata, if supported by this GreptimeDB version
-SELECT *
-FROM information_schema.table_semantics
-WHERE table_name = '{{ tbl }}'{% if schema %} AND table_schema = '{{ schema }}'{% endif %};
 
 -- Column details
 SELECT column_name, data_type, semantic_type, is_nullable
@@ -91,6 +80,7 @@ FROM INFORMATION_SCHEMA.PROCESS_LIST;
 
 ## References
 
+- [Skill: greptimedb-cluster-health-check](https://docs.greptime.com/skills/greptimedb-cluster-health-check/SKILL.md) - Verify a deployment is healthy; fetch and follow it for depth beyond this prompt
 - [INFORMATION_SCHEMA](https://docs.greptime.com/reference/sql/information-schema/overview) - System tables overview
 - [CLUSTER_INFO](https://docs.greptime.com/reference/sql/information-schema/cluster-info) - Node topology and status
 - [REGION_PEERS](https://docs.greptime.com/reference/sql/information-schema/region-peers) - Region distribution and health

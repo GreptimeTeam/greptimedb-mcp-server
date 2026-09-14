@@ -98,6 +98,7 @@ transform:
 
 ## References
 
+- [Skill: greptimedb-performance-diagnosis](https://docs.greptime.com/skills/greptimedb-performance-diagnosis/SKILL.md) - Find the bottleneck behind stalled ingestion; fetch and follow it for depth beyond this prompt
 - [Pipeline Configuration](https://docs.greptime.com/reference/pipeline/pipeline-config/)
 - [Manage Pipelines](https://docs.greptime.com/user-guide/logs/manage-pipelines)
 - [Read and Write Traces](https://docs.greptime.com/user-guide/traces/read-write)

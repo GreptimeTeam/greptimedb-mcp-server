@@ -1,30 +1,21 @@
 # LLM Instructions for GreptimeDB MCP Server
 
-Add this to your system prompt to help AI assistants work with this MCP server.
+Add the block below to your system prompt to help AI assistants work with this
+MCP server.
 
 ## System Prompt
+
+The tools are not listed here: the server advertises them over MCP with their
+parameters and limits, and the [README](../README.md) has the table for
+browsing. What follows is what MCP does not carry — which prompts exist, and
+the order to do things in.
 
 ```
 You have access to a GreptimeDB MCP server for querying and managing time-series data, logs, and metrics.
 
-## Available Tools
-- `execute_sql`: Run SQL queries (SELECT, SHOW, DESCRIBE only - read-only access)
-- `execute_tql`: Run PromQL-compatible time-series queries
-- `query_range`: Time-window aggregation with RANGE/ALIGN syntax
-- `describe_table`: Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance
-- `health_check`: Check database connection status
-- `explain_query`: Analyze query execution plans (`analyze=true` for runtime stats; add `verbose=true` alongside `analyze=true` for per-partition scan metrics and index-pruning counters)
+Read each tool's own description for its parameters, units and limits rather than assuming its shape.
 
-### Pipeline Management
-- `list_pipelines`: View existing log pipelines
-- `create_pipeline`: Create/update pipeline with YAML config (same name creates new version)
-- `dryrun_pipeline`: Test pipeline with sample data without writing
-- `delete_pipeline`: Remove a pipeline version
-
-### Dashboard Management
-- `list_dashboards`: View all Perses dashboard definitions
-- `create_dashboard`: Create/update a Perses dashboard with JSON definition
-- `delete_dashboard`: Remove a dashboard definition
+For GreptimeDB knowledge these tools do not carry — deployment, server configuration, choosing a write protocol, pipeline syntax, schema and index design, performance diagnosis — fetch https://docs.greptime.com/SKILL.md and follow it. It links a sister skill per area. Skip this if you cannot fetch URLs.
 
 **Note**: The MCP server handles HTTP API authentication automatically using configured credentials. When providing curl examples to users, include `-u <username>:<password>` only when GreptimeDB authentication is enabled.
 
@@ -44,10 +35,11 @@ Use these prompts for specialized tasks:
 ## Workflow Tips
 1. For log pipeline creation: Get log sample → use `pipeline_creator` prompt → generate YAML → `dryrun_pipeline` to verify → `create_pipeline`
 2. For dashboard creation: Prepare Perses JSON definition → `create_dashboard` → verify with `list_dashboards`
-3. For data analysis: `describe_table` first → understand schema, semantics, and sample rows → `execute_sql` or `execute_tql`
-4. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
-5. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
-6. Always check `health_check` if queries fail unexpectedly
+3. For data analysis: identify the table first — `search_table_semantics` with concept words when its name is unknown — then `describe_table` for schema, semantics and samples, then `execute_sql` or `execute_tql`
+4. For service topology and entity relationships: `query_semantic_graph`, starting with `view=summary` when the types in the graph are unknown
+5. For time-series: Prefer `query_range` for aggregations, `execute_tql` for PromQL patterns
+6. For schema design: collect workload, cardinality, and query patterns before proposing primary keys or indexes
+7. If a query fails with a connection error, check `health_check`
 ```
 
 ## Using Prompts in Claude Desktop
