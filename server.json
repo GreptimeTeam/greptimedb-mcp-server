@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.GreptimeTeam/greptimedb-mcp-server",
-  "description": "Query and analyze GreptimeDB metrics, logs and traces via SQL, TQL and RANGE queries. Manage pipelines and Perses dashboards.",
+  "description": "Query GreptimeDB metrics, logs and traces with SQL, TQL and RANGE. Manage pipelines and dashboards.",
   "repository": {
     "url": "https://github.com/GreptimeTeam/greptimedb-mcp-server",
     "source": "github"
