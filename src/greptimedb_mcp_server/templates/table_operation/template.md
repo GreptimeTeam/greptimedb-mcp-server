@@ -80,6 +80,7 @@ FROM INFORMATION_SCHEMA.PROCESS_LIST;
 
 ## References
 
+- [Skill: greptimedb-cluster-health-check](https://docs.greptime.com/skills/greptimedb-cluster-health-check/SKILL.md) - Verify a deployment is healthy; fetch and follow it for depth beyond this prompt
 - [INFORMATION_SCHEMA](https://docs.greptime.com/reference/sql/information-schema/overview) - System tables overview
 - [CLUSTER_INFO](https://docs.greptime.com/reference/sql/information-schema/cluster-info) - Node topology and status
 - [REGION_PEERS](https://docs.greptime.com/reference/sql/information-schema/region-peers) - Region distribution and health

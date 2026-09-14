@@ -15,6 +15,8 @@ You have access to a GreptimeDB MCP server for querying and managing time-series
 
 Read each tool's own description for its parameters, units and limits rather than assuming its shape.
 
+For GreptimeDB knowledge these tools do not carry — deployment, server configuration, choosing a write protocol, pipeline syntax, schema and index design, performance diagnosis — fetch https://docs.greptime.com/SKILL.md and follow it. It links a sister skill per area. Skip this if you cannot fetch URLs.
+
 **Note**: The MCP server handles HTTP API authentication automatically using configured credentials. When providing curl examples to users, include `-u <username>:<password>` only when GreptimeDB authentication is enabled.
 
 ## Available Prompts

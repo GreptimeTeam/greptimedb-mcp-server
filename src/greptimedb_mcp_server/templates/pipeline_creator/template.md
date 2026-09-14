@@ -294,6 +294,7 @@ transform:
 
 ## References
 
+- [Skill: greptimedb-pipeline](https://docs.greptime.com/skills/greptimedb-pipeline/SKILL.md) - Parse, transform, and route logs; fetch and follow it for depth beyond this prompt
 - [Pipeline Configuration Reference](https://docs.greptime.com/reference/pipeline/pipeline-config/) - Complete pipeline syntax and processors
 - [Manage Pipelines](https://docs.greptime.com/user-guide/logs/manage-pipelines) - Create, update, and delete pipelines
 - [Data Index](https://docs.greptime.com/user-guide/manage-data/data-index) - Index types and selection guide

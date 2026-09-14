@@ -71,6 +71,7 @@ ORDER BY ts DESC LIMIT 50;
 
 ## References
 
+- [Skill: greptimedb-pipeline](https://docs.greptime.com/skills/greptimedb-pipeline/SKILL.md) - Parse, transform, and route logs; fetch and follow it for depth beyond this prompt
 - [Full-Text Search](https://docs.greptime.com/user-guide/logs/fulltext-search) - Full-text search syntax and operators
 - [Log Query](https://docs.greptime.com/user-guide/query-data/log-query) - Log query patterns and examples
 - [SQL SELECT](https://docs.greptime.com/reference/sql/select) - SQL SELECT syntax reference

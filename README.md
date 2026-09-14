@@ -77,6 +77,8 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 
 For LLM integration and prompt usage, see [docs/llm-instructions.md](docs/llm-instructions.md).
 
+These tools cover querying and managing data in an existing GreptimeDB. For deployment, server configuration, write protocols, pipeline syntax, schema design, and performance diagnosis, point the assistant at the GreptimeDB skills index at <https://docs.greptime.com/SKILL.md>.
+
 ## Configuration
 
 ### Environment Variables

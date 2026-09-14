@@ -94,6 +94,7 @@ GROUP BY i.index_type, i.target_json;
 
 ## References
 
+- [Skill: greptimedb-table-design](https://docs.greptime.com/skills/greptimedb-table-design/SKILL.md) - Table schemas, primary keys, indexes, partitioning; fetch and follow it for depth beyond this prompt
 - [Data Model](https://docs.greptime.com/user-guide/concepts/data-model)
 - [CREATE TABLE](https://docs.greptime.com/reference/sql/create)
 - [Data Index](https://docs.greptime.com/user-guide/manage-data/data-index)
