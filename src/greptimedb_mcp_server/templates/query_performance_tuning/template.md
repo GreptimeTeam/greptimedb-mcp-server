@@ -40,6 +40,7 @@ DESCRIBE {{ table }};
 SHOW CREATE TABLE {{ table }};
 {% else %}
 -- Identify the table first, then run DESCRIBE and SHOW CREATE TABLE.
+-- search_table_semantics("<concept>") narrows a wide schema faster.
 SHOW TABLES;
 {% endif %}
 ```

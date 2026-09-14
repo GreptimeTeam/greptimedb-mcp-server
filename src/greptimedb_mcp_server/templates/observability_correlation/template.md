@@ -10,7 +10,7 @@ Trace table used in examples: `{{ traces }}`
 
 ## Investigation Flow
 
-1. Use `SHOW TABLES` and `describe_table` to identify the actual metric, log, and trace tables.
+1. Identify the actual metric, log, and trace tables: `search_table_semantics` with concept words, or `SHOW TABLES` on a small schema, then `describe_table`.
 2. Keep all queries inside the same time window.
 3. Pivot by `service_name`, `trace_id`, `span_id`, route, status code, pod, host, or other shared dimensions.
 4. Prefer narrow exploratory queries before expensive scans.

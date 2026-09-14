@@ -4,17 +4,10 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 
 **Time Range**: {{ start_time }} to {{ end_time }}
 
-## Available Tools
-
-- `execute_sql` - Execute SQL queries (MySQL syntax)
-- `describe_table` - Inspect table profile: schema, semantics, and sample rows
-- `execute_tql` - Execute PromQL-compatible queries
-- `query_range` - Time-window aggregations with RANGE syntax
-
 ## Guidelines
 
 1. Always filter by time range for time-series queries
-2. Use `describe_table` first to inspect schema, semantic metadata, and sample rows
+2. Find the table first: `search_table_semantics` with concept words when its name is unknown, then `describe_table` for schema, semantic metadata, and sample rows
 3. Use aggregation functions: avg, max, min, sum, count, stddev
 4. Results are read-only; write operations are blocked
 5. Verify the actual time index and value column names before running examples
@@ -22,7 +15,8 @@ Analyze metrics data from GreptimeDB for topic: {{ topic }}
 ## Example Queries
 
 ```sql
--- List tables
+-- List tables. On a wide schema, search_table_semantics("cpu usage") narrows
+-- faster than reading this list.
 SHOW TABLES;
 
 -- Get table profile with schema, semantics, and sample rows
