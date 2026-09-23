@@ -642,3 +642,10 @@ def test_truncate_to_budget_does_not_split_a_character():
 
     assert len(result.encode("utf-8")) <= 600
     result.encode("utf-8").decode("utf-8")  # raises if a character was split
+
+
+def test_budget_backstop_does_not_invent_tool_parameters():
+    result = truncate_to_budget("x" * 1000, 300, "json")
+    assert "truncated" in result
+    assert "`limit`" not in result
+    assert "select fewer columns" not in result

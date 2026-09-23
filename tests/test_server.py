@@ -983,18 +983,15 @@ async def test_describe_table_schema_qualified():
 
 
 @pytest.mark.asyncio
-async def test_describe_table_catalog_qualified():
-    """Test describe_table parses catalog.schema.table, ignoring the catalog."""
-    result = await describe_table(table="greptime.public.users")
-    data = json.loads(result)
-    assert data["table_schema"] == "public"
-    assert data["table_name"] == "users"
-    assert data["schema"]["time_index"] == "ts"
+@pytest.mark.parametrize("table", ["greptime.public.users", "other.public.users"])
+async def test_describe_table_rejects_catalog_qualifier(table):
+    with pytest.raises(ToolError, match="Catalog-qualified"):
+        await describe_table(table=table)
 
 
 @pytest.mark.asyncio
-async def test_describe_table_catalog_qualified_sample_ignores_catalog():
-    """The sample query targets schema.table only, never the catalog segment."""
+async def test_describe_table_schema_qualified_sample():
+    """Samples use the same schema as the metadata query."""
     executed = []
 
     class Cursor:
@@ -1048,7 +1045,7 @@ async def test_describe_table_catalog_qualified_sample_ignores_catalog():
     server._state.pool = None
     server._state.get_connection = lambda: Connection()
 
-    result = await describe_table(table="greptime.public.users")
+    result = await describe_table(table="public.users")
     data = json.loads(result)
 
     sample_query = next(q for q in executed if "SELECT * FROM" in q)
@@ -1335,3 +1332,48 @@ async def test_audit_uses_registered_tool_name(caplog):
         server.mcp.remove_tool("renamed_tool")
 
     assert "[AUDIT] renamed_tool" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_tool_parameter_descriptions_reach_sdk_schema():
+    tools = await server.mcp.list_tools()
+    for tool in tools:
+        for name, parameter in tool.input_schema["properties"].items():
+            assert parameter.get("description"), (tool.name, name)
+    dryrun = next(tool for tool in tools if tool.name == "dryrun_pipeline")
+    assert "data" in dryrun.input_schema["required"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_sql_reports_row_limit_truncation(monkeypatch, fmt, count):
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("SELECT"),
+        [(i, "name") for i in range(count)],
+    )
+    result = await execute_sql(query="SELECT id FROM users", limit=2, format=fmt)
+    if fmt == "json":
+        assert json.loads(result)["truncated"] is (count > 2)
+    else:
+        assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_tql_reports_read_limit_truncation(monkeypatch, fmt, count):
+    monkeypatch.setattr(server, "MAX_QUERY_LIMIT", 2)
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("TQL"),
+        [(i, "host", i) for i in range(count)],
+    )
+    result = await execute_tql(query="cpu", start="0", end="10", step="1s", format=fmt)
+    if fmt == "json":
+        data = json.loads(result)
+        assert data["row_count"] == 2
+        assert data["truncated"] is (count > 2)
+    else:
+        assert ("truncated" in result) is (count > 2)

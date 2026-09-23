@@ -22,8 +22,7 @@ def truncate_to_budget(text: str, budget: int, fmt: str) -> str:
 
     notice = (
         f"\n\n[truncated: the result was {len(encoded)} bytes, over the "
-        f"{budget}-byte budget, and was cut here. It is no longer valid {fmt}. "
-        "Narrow the query, lower `limit`, or select fewer columns.]"
+        f"{budget}-byte budget, and was cut here. It is no longer valid {fmt}.]"
     )
     keep = max(0, budget - len(notice.encode("utf-8")))
     # errors="ignore" drops a multi-byte character the cut landed inside.

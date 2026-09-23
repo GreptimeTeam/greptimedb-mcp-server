@@ -132,13 +132,14 @@ def get_state() -> AppState:
 def _split_table_reference(table: str, default_schema: str) -> tuple[str, str]:
     """Split a possibly-qualified table reference into (schema, table).
 
-    Mirrors GreptimeDB's table_idents_to_full_name: the table name is always the
-    last segment, the schema the second-to-last. A leading catalog segment
-    (catalog.schema.table) is accepted for compatibility but ignored, since
-    information_schema is scoped to the connected catalog. Input is restricted to
-    at most three unquoted segments by validate_table_name.
+    Metadata queries are scoped to the connected catalog, so a catalog
+    qualifier cannot be honored.
     """
     parts = table.split(".")
+    if len(parts) == 3:
+        raise ValueError(
+            "Catalog-qualified names are not supported; use table or schema.table"
+        )
     if len(parts) == 1:
         return default_schema, parts[0]
     return parts[-2], parts[-1]
@@ -498,6 +499,8 @@ def _process_bounded_rows(
         # it from having hit `limit`, which calls for a different fix.
         dropped = len(rows) - kept
         if format != "json":
+            if has_more:
+                formatted += f"\n[truncated: more rows matched than the {len(rows)}-row read limit]"
             if dropped:
                 formatted += (
                     f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
@@ -609,11 +612,16 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
 
 @tool()
 async def execute_sql(
-    query: Annotated[str, "The SQL query to execute (using MySQL dialect)"],
+    query: Annotated[
+        str, Field(description="The SQL query to execute (using MySQL dialect)")
+    ],
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: csv)"
+        str, Field(description="Output format: csv, json, or markdown (default: csv)")
     ] = "csv",
-    limit: Annotated[int, "Maximum number of rows to return (default: 1000)"] = 1000,
+    limit: Annotated[
+        int,
+        Field(description="Maximum rows to return, clamped to 1-10000 (default: 1000)"),
+    ] = 1000,
 ) -> str:
     """Execute SQL query against GreptimeDB. Please use MySQL dialect.
 
@@ -629,9 +637,10 @@ async def execute_sql(
     (--allow-write / GREPTIMEDB_ALLOW_WRITE), destructive SQL (DDL/DML) is
     also permitted.
 
-    Results are bounded by a byte budget as well as by `limit`. When rows are
-    dropped to fit it, `truncated` is true and `truncation_reason` says so;
-    that is a different cause from `limit` being reached.
+    Results are bounded by a byte budget and a row limit clamped to 1-10000.
+    JSON row results report `truncated`; `truncation_reason` describes rows
+    dropped for the byte budget. CSV and Markdown report truncation in a text
+    notice. SHOW TABLES and SHOW DATABASES return plain text regardless of format.
     """
     state = get_state()
     limit = _validate_sql_params(query, format, limit)
@@ -657,20 +666,31 @@ async def execute_sql(
 async def describe_table(
     table: Annotated[
         str,
-        "Table name to describe (supports table, schema.table, or "
-        "catalog.schema.table format)",
+        Field(
+            description=(
+                "Unquoted table or schema.table name. Catalog qualifiers are not supported."
+            )
+        ),
     ],
     include_semantics: Annotated[
         bool,
-        "Include table semantic metadata from information_schema.table_semantics",
+        Field(
+            description=(
+                "Include table semantic metadata from information_schema.table_semantics"
+            )
+        ),
     ] = True,
     include_samples: Annotated[
         bool,
-        "Include a small sample of table rows for context",
+        Field(description="Include a small sample of table rows for context"),
     ] = True,
     sample_limit: Annotated[
         int,
-        f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)",
+        Field(
+            description=(
+                f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)"
+            )
+        ),
     ] = 5,
 ) -> str:
     """Get a table profile: schema, semantic metadata, sample rows, and guidance.
@@ -762,21 +782,38 @@ async def describe_table(
 async def search_table_semantics(
     query: Annotated[
         str,
-        "Telemetry concepts to search for, such as 'redis memory usage' or "
-        "'request latency'",
+        Field(
+            description=(
+                "Telemetry concepts to search for, such as 'redis memory usage' or "
+                "'request latency'"
+            )
+        ),
     ],
     signal_type: Annotated[
         str | None,
-        "Restrict results to one signal type: "
-        f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
-        "was never stamped are excluded by this filter.",
+        Field(
+            description=(
+                "Restrict results to one signal type: "
+                f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
+                "was never stamped are excluded by this filter."
+            )
+        ),
     ] = None,
     schema: Annotated[
         str | None,
-        "Database to search. Defaults to the one this server is connected to.",
+        Field(
+            description=(
+                "Database to search. Defaults to the one this server is connected to."
+            )
+        ),
     ] = None,
     limit: Annotated[
-        int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+        int,
+        Field(
+            description=(
+                f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+            )
+        ),
     ] = semantics.MAX_SEARCH_LIMIT,
 ) -> str:
     """Find tables by observability concept when the right table name is unknown.
@@ -1071,27 +1108,46 @@ async def health_check() -> str:
 async def execute_tql(
     query: Annotated[
         str,
-        "PromQL-compatible expression. Supports standard PromQL syntax: "
-        "rate(), increase(), sum(), avg(), histogram_quantile(), etc. "
-        "Example: rate(http_requests_total[5m])",
+        Field(
+            description=(
+                "PromQL-compatible expression. Supports standard PromQL syntax: "
+                "rate(), increase(), sum(), avg(), histogram_quantile(), etc. "
+                "Example: rate(http_requests_total[5m])"
+            )
+        ),
     ],
     start: Annotated[
         str,
-        "Start time: SQL expression (e.g., \"now() - interval '5' minute\"), "
-        "RFC3339 (e.g., '2024-01-01T00:00:00Z'), or Unix timestamp",
+        Field(
+            description=(
+                "Start time: SQL expression (e.g., \"now() - interval '5' minute\"), "
+                "RFC3339 (e.g., '2024-01-01T00:00:00Z'), or Unix timestamp"
+            )
+        ),
     ],
     end: Annotated[
         str,
-        "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp",
+        Field(
+            description=(
+                "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp"
+            )
+        ),
     ],
-    step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
+    step: Annotated[
+        str, Field(description="Query resolution step, e.g., '1m', '5m', '1h'")
+    ],
     lookback: Annotated[
         str | None,
-        "Lookback delta: how far back a sample may be reused when a step "
-        "lands where there is no sample, e.g. '5m'. Defaults to 5m.",
+        Field(
+            description=(
+                "Lookback delta: how far back a sample may be reused when a step "
+                "lands where there is no sample, e.g. '5m'. Defaults to 5m."
+            )
+        ),
     ] = None,
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: json)"
+        str,
+        Field(description="Output format: csv, json, or markdown (default: json)"),
     ] = "json",
 ) -> str:
     """Execute TQL query for time-series analysis. TQL is PromQL-compatible.
@@ -1102,6 +1158,10 @@ async def execute_tql(
 
     `metric{__schema__="other_db"}` reads a database other than the connected
     one. That matcher accepts `=` only.
+
+    Returns at most 10000 rows, also bounded by a byte budget. JSON reports
+    `truncated`; CSV and Markdown append a truncation notice. Narrow the time
+    range or match fewer series when the result is incomplete.
     """
     state = get_state()
 
@@ -1135,10 +1195,15 @@ async def execute_tql(
                 cursor.execute(tql)
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchmany(MAX_QUERY_LIMIT)
-                return columns, rows
+                has_more = cursor.fetchone() is not None
+                if has_more:
+                    # Consume the result before returning the pooled connection.
+                    while cursor.fetchone() is not None:
+                        pass
+                return columns, rows, has_more
 
     try:
-        columns, rows = await asyncio.to_thread(_sync_tql)
+        columns, rows, has_more = await asyncio.to_thread(_sync_tql)
         elapsed_ms = (time.time() - start_time) * 1000
         return _process_bounded_rows(
             columns,
@@ -1147,6 +1212,7 @@ async def execute_tql(
             elapsed_ms,
             "Shorten the time range, widen `step`, or match fewer series.",
             meta={"tql": tql},
+            has_more=has_more,
         )
 
     except Error as e:
@@ -1156,19 +1222,35 @@ async def execute_tql(
 
 @tool()
 async def query_range(
-    table: Annotated[str, "Table name to query (supports schema.table format)"],
-    select: Annotated[
-        str, "Columns and aggregations, e.g., 'ts, host, avg(cpu) RANGE \\'5m\\''"
+    table: Annotated[
+        str, Field(description="Table name to query (supports schema.table format)")
     ],
-    align: Annotated[str, "Alignment interval, e.g., '1m', '5m'"],
-    by: Annotated[str | None, "Group by columns, e.g., 'host'"] = None,
-    where: Annotated[str | None, "WHERE clause conditions"] = None,
-    fill: Annotated[str | None, "Fill strategy: NULL, PREV, LINEAR, or a value"] = None,
-    order_by: Annotated[str | None, "ORDER BY clause (e.g., 'ts DESC')"] = None,
+    select: Annotated[
+        str,
+        Field(
+            description=(
+                "Columns and aggregations, e.g., ts, host, avg(cpu) RANGE '5m'"
+            )
+        ),
+    ],
+    align: Annotated[str, Field(description="Alignment interval, e.g., '1m', '5m'")],
+    by: Annotated[
+        str | None, Field(description="Group by columns, e.g., 'host'")
+    ] = None,
+    where: Annotated[str | None, Field(description="WHERE clause conditions")] = None,
+    fill: Annotated[
+        str | None, Field(description="Fill strategy: NULL, PREV, LINEAR, or a value")
+    ] = None,
+    order_by: Annotated[
+        str | None, Field(description="ORDER BY clause (e.g., 'ts DESC')")
+    ] = None,
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: json)"
+        str,
+        Field(description="Output format: csv, json, or markdown (default: json)"),
     ] = "json",
-    limit: Annotated[int, "Maximum rows to return"] = 1000,
+    limit: Annotated[
+        int, Field(description="Maximum rows to return, clamped to 1-10000")
+    ] = 1000,
 ) -> str:
     """Execute time-window aggregation query using GreptimeDB's RANGE query syntax.
 
@@ -1251,14 +1333,20 @@ async def query_range(
 
 @tool()
 async def explain_query(
-    query: Annotated[str, "SQL or TQL query to analyze"],
-    analyze: Annotated[bool, "Execute and show actual metrics"] = False,
+    query: Annotated[str, Field(description="SQL or TQL query to analyze")],
+    analyze: Annotated[
+        bool, Field(description="Execute and show actual metrics")
+    ] = False,
     verbose: Annotated[
         bool,
-        "Show detailed per-partition scan metrics; combine with "
-        "analyze=true to reveal index-pruning counters "
-        "(rg_bloom_filtered, rg_inverted_filtered, rg_minmax_filtered, "
-        "rows_bloom_filtered, rows_inverted_filtered)",
+        Field(
+            description=(
+                "Show detailed per-partition scan metrics; combine with "
+                "analyze=true to reveal index-pruning counters "
+                "(rg_bloom_filtered, rg_inverted_filtered, rg_minmax_filtered, "
+                "rows_bloom_filtered, rows_inverted_filtered)"
+            )
+        ),
     ] = False,
 ) -> str:
     """Analyze SQL or TQL query execution plan."""
@@ -1368,7 +1456,9 @@ def _format_pipeline_version(ns_timestamp: int) -> str:
 
 @tool()
 async def list_pipelines(
-    name: Annotated[str | None, "Optional pipeline name to filter by"] = None,
+    name: Annotated[
+        str | None, Field(description="Optional pipeline name to filter by")
+    ] = None,
 ) -> str:
     """List all pipelines or get details of a specific pipeline."""
     state = get_state()
@@ -1423,8 +1513,10 @@ async def list_pipelines(
 
 @tool()
 async def create_pipeline(
-    name: Annotated[str, "Name of the pipeline to create"],
-    pipeline: Annotated[str, "Pipeline configuration in YAML format"],
+    name: Annotated[str, Field(description="Name of the pipeline to create")],
+    pipeline: Annotated[
+        str, Field(description="Pipeline configuration in YAML format")
+    ],
 ) -> str:
     """Create a new pipeline in GreptimeDB.
 
@@ -1470,20 +1562,35 @@ async def create_pipeline(
 
 @tool()
 async def dryrun_pipeline(
+    data: Annotated[
+        str,
+        Field(
+            description="Test data in JSON or NDJSON format (single object or array)"
+        ),
+    ],
     pipeline: Annotated[
         str | None,
-        "Pipeline configuration in YAML format (inline). Provide this to test a pipeline without saving it.",
+        Field(
+            description=(
+                "Pipeline configuration in YAML format (inline). Provide this to test a pipeline without saving it."
+            )
+        ),
     ] = None,
     pipeline_name: Annotated[
         str | None,
-        "Name of the saved pipeline to test. Provide either 'pipeline' or 'pipeline_name', not both.",
+        Field(
+            description=(
+                "Name of the saved pipeline to test. Provide either 'pipeline' or 'pipeline_name', not both."
+            )
+        ),
     ] = None,
-    data: Annotated[
-        str, "Test data in JSON or NDJSON format (single object or array)"
-    ] = "",
     data_type: Annotated[
         str | None,
-        "Content type of the data (e.g., 'application/x-ndjson'). If omitted, GreptimeDB will use default.",
+        Field(
+            description=(
+                "Content type of the data (e.g., 'application/x-ndjson'). If omitted, GreptimeDB will use default."
+            )
+        ),
     ] = None,
 ) -> str:
     """Test a pipeline with sample data without writing to the database.
@@ -1554,8 +1661,10 @@ async def dryrun_pipeline(
 
 @tool()
 async def delete_pipeline(
-    name: Annotated[str, "Name of the pipeline to delete"],
-    version: Annotated[str, "Version of the pipeline to delete (timestamp)"],
+    name: Annotated[str, Field(description="Name of the pipeline to delete")],
+    version: Annotated[
+        str, Field(description="Version of the pipeline to delete (timestamp)")
+    ],
 ) -> str:
     """Delete a specific version of a pipeline from GreptimeDB.
 
@@ -1633,8 +1742,10 @@ async def list_dashboards() -> str:
 
 @tool()
 async def create_dashboard(
-    name: Annotated[str, "Name of the dashboard"],
-    definition: Annotated[str, "Perses dashboard definition in JSON format"],
+    name: Annotated[str, Field(description="Name of the dashboard")],
+    definition: Annotated[
+        str, Field(description="Perses dashboard definition in JSON format")
+    ],
 ) -> str:
     """Create or update a Perses dashboard definition in GreptimeDB.
 
@@ -1676,7 +1787,7 @@ async def create_dashboard(
 
 @tool()
 async def delete_dashboard(
-    name: Annotated[str, "Name of the dashboard to delete"],
+    name: Annotated[str, Field(description="Name of the dashboard to delete")],
 ) -> str:
     """Delete a Perses dashboard definition from GreptimeDB.
 
