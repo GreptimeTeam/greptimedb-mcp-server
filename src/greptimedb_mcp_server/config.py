@@ -2,10 +2,14 @@ import argparse
 from dataclasses import dataclass
 import os
 
-# Large enough for a useful page of rows, small enough to survive the result
-# limits MCP clients impose. Raise it with --max-result-bytes when the client
-# accepts more.
-DEFAULT_MAX_RESULT_BYTES = 64 * 1024
+# A backstop against a result no caller could consume, not a shaper of normal
+# ones. A 1000-row read -- the default `limit` -- measures about 79KB of JSON
+# for a 3-column metric table and 256KB for an 8-column log table, so a
+# tighter budget would truncate ordinary log and trace queries rather than
+# catch pathological ones. A 29-column trace table still exceeds this at 1MB,
+# which is the case worth cutting. Lower it with --max-result-bytes for a
+# client that accepts less.
+DEFAULT_MAX_RESULT_BYTES = 256 * 1024
 MIN_RESULT_BYTES = 1024
 
 

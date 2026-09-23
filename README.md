@@ -51,7 +51,7 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 
 `search_table_semantics` and the semantic metadata in `describe_table` read `information_schema.table_semantics`. A table appears there when it carries a `greptime.semantic.*` option or a built-in convention derives an entity declaration for it; other tables are absent. The server reads the view's column list once per process and selects only the columns it exposes. `entity_declarations` requires GreptimeDB 1.3; on earlier versions it is reported as a missing column rather than as an empty declaration set.
 
-Tool results are bounded by `GREPTIMEDB_MAX_RESULT_BYTES` (default 65536). A query result over the budget returns fewer rows and reports it in `truncated` and `truncation_reason`; a result with no rows to shed is cut with a notice at the end.
+Tool results are bounded by `GREPTIMEDB_MAX_RESULT_BYTES` (default 262144). A query result over the budget returns fewer rows and reports it in `truncated` and `truncation_reason`; a result with no rows to shed is cut with a notice at the end. The budget is a backstop against a result too large to be consumed, so lower it if your MCP client rejects results before it is reached.
 
 ### Cross-database queries
 
@@ -114,7 +114,7 @@ GREPTIMEDB_MASK_ENABLED=true   # Enable sensitive data masking
 GREPTIMEDB_MASK_PATTERNS=      # Additional patterns (comma-separated)
 GREPTIMEDB_AUDIT_ENABLED=true  # Enable audit logging
 GREPTIMEDB_ALLOW_WRITE=false   # Allow writes: DDL/DML plus pipeline and dashboard changes (DANGEROUS, local/test only)
-GREPTIMEDB_MAX_RESULT_BYTES=65536  # Byte budget for a single tool result
+GREPTIMEDB_MAX_RESULT_BYTES=262144 # Byte budget for a single tool result
 
 # Transport (for HTTP server mode)
 GREPTIMEDB_TRANSPORT=stdio     # stdio, sse, or streamable-http
