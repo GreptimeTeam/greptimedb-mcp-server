@@ -471,13 +471,15 @@ def _process_bounded_rows(
     rows: list,
     format: str,
     elapsed_ms: float,
+    remedy: str,
     meta: dict[str, object] | None = None,
     has_more: bool = False,
 ) -> str:
     """Render row results inside the byte budget without breaking JSON.
 
     `meta` is the envelope fields that precede the data, such as the statement
-    a tool built.
+    a tool built. `remedy` names the arguments that caller actually has, so a
+    shed result does not send the reader after a parameter the tool lacks.
     """
     state = get_state()
 
@@ -498,7 +500,7 @@ def _process_bounded_rows(
                 formatted += (
                     f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
                     f"fit the {state.max_result_bytes}-byte result budget. "
-                    "Select fewer columns, narrow the query, or lower `limit`.]"
+                    f"{remedy}]"
                 )
             return formatted
 
@@ -512,8 +514,7 @@ def _process_bounded_rows(
         if dropped:
             result["truncation_reason"] = (
                 f"Dropped {dropped} of {len(rows)} rows read, to fit the "
-                f"{state.max_result_bytes}-byte result budget. Select fewer "
-                "columns, narrow the query, or lower `limit`."
+                f"{state.max_result_bytes}-byte result budget. {remedy}"
             )
         return json.dumps(result, indent=2, ensure_ascii=False)
 
@@ -536,6 +537,7 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
         result["rows"],
         format,
         elapsed_ms,
+        "Select fewer columns, narrow the query, or lower `limit`.",
         has_more=result["has_more"],
     )
 
@@ -1141,6 +1143,12 @@ async def execute_tql(
             rows,
             format,
             elapsed_ms,
+            # Levers that drop volume without resampling. Widening `step`
+            # would shrink it faster but changes the values themselves, and
+            # a caller that took that advice could read a smoothed-away
+            # spike as an absent one.
+            "Shorten the time range, or select fewer series with label "
+            "matchers or aggregation.",
             meta={"tql": tql},
         )
 
@@ -1235,6 +1243,8 @@ async def query_range(
             rows,
             format,
             elapsed_ms,
+            "Narrow `where` or lower `limit`. Widening `align` also fits more "
+            "in, but coarsens every window rather than returning less.",
             meta={"query": query},
         )
 

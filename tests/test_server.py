@@ -626,6 +626,11 @@ async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
     assert data["truncated"] is True
     assert "result budget" in data["truncation_reason"]
     assert len(result.encode("utf-8")) <= 1200
+    # execute_tql has no `limit`, and resampling advice would change the
+    # values rather than return fewer of them.
+    assert "`limit`" not in data["truncation_reason"]
+    assert "`step`" not in data["truncation_reason"]
+    assert "time range" in data["truncation_reason"]
 
 
 @pytest.mark.asyncio
