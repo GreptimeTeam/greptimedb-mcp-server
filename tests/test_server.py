@@ -1377,3 +1377,26 @@ async def test_tql_reports_read_limit_truncation(monkeypatch, fmt, count):
         assert data["truncated"] is (count > 2)
     else:
         assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_range_reports_limit_truncation(monkeypatch, fmt, count):
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: "ALIGN" in q.upper(),
+        [("2024-01-01 00:00:00", "host", i) for i in range(count)],
+    )
+    result = await query_range(
+        table="t", select="ts, host, avg(v) RANGE '5m'", align="1m", limit=2, format=fmt
+    )
+    if fmt == "json":
+        data = json.loads(result)
+        assert data["row_count"] == 2
+        assert data["truncated"] is (count > 2)
+        # The mock ignores LIMIT; a database stops at it, so the probe row
+        # has to be asked for in the statement itself.
+        assert data["query"].endswith("LIMIT 3")
+    else:
+        assert ("truncated" in result) is (count > 2)

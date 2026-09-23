@@ -1296,7 +1296,9 @@ async def query_range(
     if order_by:
         query_parts.append(f"ORDER BY {order_by}")
 
-    query_parts.append(f"LIMIT {limit}")
+    # One row past the limit: with LIMIT N the database never says whether
+    # more matched, and the result would claim `truncated: false` when cut.
+    query_parts.append(f"LIMIT {limit + 1}")
 
     query = " ".join(query_parts)
 
@@ -1311,11 +1313,11 @@ async def query_range(
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchmany(limit)
-                return columns, rows
+                rows = cursor.fetchmany(limit + 1)
+                return columns, rows[:limit], len(rows) > limit
 
     try:
-        columns, rows = await asyncio.to_thread(_sync_range)
+        columns, rows, has_more = await asyncio.to_thread(_sync_range)
         elapsed_ms = (time.time() - start_time) * 1000
         return _process_bounded_rows(
             columns,
@@ -1324,6 +1326,7 @@ async def query_range(
             elapsed_ms,
             "Widen `align`, narrow `where`, or lower `limit`.",
             meta={"query": query},
+            has_more=has_more,
         )
 
     except Error as e:
