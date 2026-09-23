@@ -20,6 +20,7 @@ from greptimedb_mcp_server.server import (
     create_pipeline,
     dryrun_pipeline,
     delete_pipeline,
+    _process_query_result,
     _validate_pipeline_name,
     _validate_dashboard_name,
     list_dashboards,
@@ -85,6 +86,170 @@ def setup_state():
     yield
 
     server._state = None
+
+
+@pytest.fixture
+def write_mode():
+    """Enable write mode, which the four state-changing tools now require."""
+    server._state.allow_write = True
+    yield
+    server._state.allow_write = False
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: create_pipeline(name="p", pipeline="version: 2"),
+        lambda: delete_pipeline(name="p", version="2024-01-01"),
+        lambda: create_dashboard(name="d", definition='{"kind": "Dashboard"}'),
+        lambda: delete_dashboard(name="d"),
+    ],
+    ids=["create_pipeline", "delete_pipeline", "create_dashboard", "delete_dashboard"],
+)
+@pytest.mark.asyncio
+async def test_state_changing_tools_refused_in_read_only(call):
+    """Read-only mode refuses every tool that changes stored state.
+
+    The state fixture leaves http_session as None, so a tool that slipped past
+    the gate would fail on the session rather than pass quietly.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await call()
+    assert "read-only mode" in str(excinfo.value)
+    assert "--allow-write" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_sheds_rows_to_fit_byte_budget(monkeypatch):
+    """An oversized result loses rows but stays parseable and says why.
+
+    Rows are wider than the truncation notice, so shedding them actually
+    shrinks the result; with narrower rows no shed rendering can fit.
+    """
+    server._state.max_result_bytes = 1200
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("SELECT"),
+        [(i, "x" * 200, "2024-01-01 00:00:00") for i in range(10)],
+    )
+    result = await execute_sql(query="SELECT * FROM users", format="json")
+
+    meta = json.loads(result)
+    assert len(result.encode("utf-8")) <= 1200
+    assert 0 < meta["row_count"] < 10
+    assert meta["truncated"] is True
+    assert "result budget" in meta["truncation_reason"]
+
+
+@pytest.mark.parametrize("fmt", ["csv", "markdown"])
+def test_non_json_result_says_when_rows_were_dropped(fmt):
+    """A shed must be visible in every format, not only in the JSON envelope.
+
+    csv is execute_sql's default, and a quietly short csv reads as the whole
+    answer rather than part of one.
+    """
+    server._state.max_result_bytes = 600
+    rows = [(i, "x" * 60) for i in range(50)]
+
+    result = _process_query_result(
+        {"type": "query", "columns": ["id", "val"], "rows": rows, "has_more": False},
+        fmt,
+        1.0,
+    )
+
+    assert "truncated" in result
+    assert "result budget" in result
+    assert len(result.encode("utf-8")) <= 600
+
+
+def test_one_outsized_row_still_yields_parseable_json():
+    """Shedding has to converge, or the backstop cuts valid JSON into junk.
+
+    A proportional estimate never settles when one row dwarfs the rest, so
+    this shape used to exhaust the rounds and get cut blind.
+    """
+    server._state.max_result_bytes = 65536
+    rows = [(0, "x" * 60000)] + [(i, "y" * 10) for i in range(1, 1000)]
+
+    result = _process_query_result(
+        {"type": "query", "columns": ["id", "val"], "rows": rows, "has_more": False},
+        "json",
+        1.0,
+    )
+
+    meta = json.loads(result)
+    assert len(result.encode("utf-8")) <= 65536
+    assert 0 < meta["row_count"] < len(rows)
+    assert meta["truncated"] is True
+
+
+def test_tools_do_not_duplicate_the_payload_as_structured_output():
+    """Every tool returns a string, so structuredContent would be a copy.
+
+    With it on, the SDK sends the same bytes twice and the byte budget covers
+    half of what actually goes over the wire.
+    """
+    for name in ("execute_sql", "describe_table", "health_check"):
+        assert server.mcp._tool_manager.get_tool(name).output_schema is None, name
+
+
+def _stub_query_rows(monkeypatch, matcher, rows):
+    """Override mocked query results for one family of statements."""
+    import conftest
+
+    original = conftest.MockCursor.execute
+
+    def stub(self, query, args=None):
+        original(self, query, args)
+        if matcher(query):
+            self._results = rows
+            self._fetch_index = 0
+
+    monkeypatch.setattr(conftest.MockCursor, "execute", stub)
+
+
+@pytest.mark.asyncio
+async def test_truncation_advice_names_only_real_arguments(monkeypatch):
+    """Advice must be actionable on the tool that gave it.
+
+    One message was shared by all three query tools and told every caller to
+    lower `limit`, which execute_tql does not take. A backticked name that is
+    not an argument sends the reader looking for one that is not there.
+    """
+    import inspect
+    import re
+
+    server._state.max_result_bytes = 1200
+    rows = [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)]
+    _stub_query_rows(monkeypatch, lambda q: True, rows)
+
+    calls = {
+        execute_sql: execute_sql(query="SELECT * FROM users", format="json"),
+        execute_tql: execute_tql(
+            query="rate(m[5m])",
+            start="2024-01-01T00:00:00Z",
+            end="2024-01-01T01:00:00Z",
+            step="1m",
+        ),
+        query_range: query_range(
+            table="metrics", select="ts, host, avg(cpu) RANGE '5m'", align="1m"
+        ),
+    }
+    for fn, coro in calls.items():
+        reason = json.loads(await coro)["truncation_reason"]
+        named = set(re.findall(r"`(\w+)`", reason))
+        assert named, f"{fn.__name__} gave no actionable argument"
+        assert named <= set(inspect.signature(fn).parameters), fn.__name__
+
+
+@pytest.mark.asyncio
+async def test_show_tables_respects_limit():
+    """The single-column listing is bounded by limit like any other read."""
+    result = await execute_sql(query="SHOW TABLES", limit=1)
+
+    assert "users" in result
+    assert "orders" not in result
+    assert "truncated at 1 rows" in result
 
 
 @pytest.mark.asyncio
@@ -484,6 +649,30 @@ async def test_execute_tql():
 
 
 @pytest.mark.asyncio
+async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
+    """Oversized TQL JSON should drop rows before the backstop slices bytes."""
+    server._state.max_result_bytes = 1200
+    _stub_query_rows(
+        monkeypatch,
+        lambda query: "TQL" in query.upper(),
+        [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)],
+    )
+
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+    )
+
+    data = json.loads(result)
+    assert 0 < data["row_count"] < 10
+    assert data["truncated"] is True
+    assert "result budget" in data["truncation_reason"]
+    assert len(result.encode("utf-8")) <= 1200
+
+
+@pytest.mark.asyncio
 async def test_execute_tql_with_lookback():
     """Test execute_tql with optional lookback parameter"""
     result = await execute_tql(
@@ -561,6 +750,30 @@ async def test_query_range():
     assert "query" in data
     assert "data" in data
     assert "ALIGN" in data["query"]
+
+
+@pytest.mark.asyncio
+async def test_query_range_sheds_rows_to_keep_json_parseable(monkeypatch):
+    """Oversized RANGE JSON should stay valid instead of being cut mid-object."""
+    server._state.max_result_bytes = 1200
+    _stub_query_rows(
+        monkeypatch,
+        lambda query: "ALIGN" in query.upper(),
+        [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)],
+    )
+
+    result = await query_range(
+        table="metrics",
+        select="ts, host, avg(cpu) RANGE '5m'",
+        align="1m",
+        by="host",
+    )
+
+    data = json.loads(result)
+    assert 0 < data["row_count"] < 10
+    assert data["truncated"] is True
+    assert "result budget" in data["truncation_reason"]
+    assert len(result.encode("utf-8")) <= 1200
 
 
 @pytest.mark.asyncio
@@ -780,18 +993,15 @@ async def test_describe_table_schema_qualified():
 
 
 @pytest.mark.asyncio
-async def test_describe_table_catalog_qualified():
-    """Test describe_table parses catalog.schema.table, ignoring the catalog."""
-    result = await describe_table(table="greptime.public.users")
-    data = json.loads(result)
-    assert data["table_schema"] == "public"
-    assert data["table_name"] == "users"
-    assert data["schema"]["time_index"] == "ts"
+@pytest.mark.parametrize("table", ["greptime.public.users", "other.public.users"])
+async def test_describe_table_rejects_catalog_qualifier(table):
+    with pytest.raises(ToolError, match="Catalog-qualified"):
+        await describe_table(table=table)
 
 
 @pytest.mark.asyncio
-async def test_describe_table_catalog_qualified_sample_ignores_catalog():
-    """The sample query targets schema.table only, never the catalog segment."""
+async def test_describe_table_schema_qualified_sample():
+    """Samples use the same schema as the metadata query."""
     executed = []
 
     class Cursor:
@@ -845,7 +1055,7 @@ async def test_describe_table_catalog_qualified_sample_ignores_catalog():
     server._state.pool = None
     server._state.get_connection = lambda: Connection()
 
-    result = await describe_table(table="greptime.public.users")
+    result = await describe_table(table="public.users")
     data = json.loads(result)
 
     sample_query = next(q for q in executed if "SELECT * FROM" in q)
@@ -1008,7 +1218,7 @@ async def test_list_pipelines_with_name():
 
 
 @pytest.mark.asyncio
-async def test_create_pipeline_invalid_name():
+async def test_create_pipeline_invalid_name(write_mode):
     """Test create_pipeline with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await create_pipeline(name="123-invalid", pipeline="version: 2")
@@ -1047,7 +1257,7 @@ async def test_dryrun_pipeline_neither_pipeline_nor_name():
 
 
 @pytest.mark.asyncio
-async def test_delete_pipeline_invalid_name():
+async def test_delete_pipeline_invalid_name(write_mode):
     """Test delete_pipeline with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await delete_pipeline(name="123-invalid", version="2024-01-01")
@@ -1055,7 +1265,7 @@ async def test_delete_pipeline_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_delete_pipeline_missing_version():
+async def test_delete_pipeline_missing_version(write_mode):
     """Test delete_pipeline with missing version"""
     result = await delete_pipeline(name="test_pipeline", version="")
     assert "Error: version is required" in result
@@ -1094,7 +1304,7 @@ def test_validate_dashboard_name_invalid():
 
 
 @pytest.mark.asyncio
-async def test_create_dashboard_invalid_name():
+async def test_create_dashboard_invalid_name(write_mode):
     """Test create_dashboard with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await create_dashboard(name="123.invalid", definition='{"kind": "Dashboard"}')
@@ -1102,14 +1312,14 @@ async def test_create_dashboard_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_create_dashboard_invalid_json():
+async def test_create_dashboard_invalid_json(write_mode):
     """Test create_dashboard with invalid JSON"""
     result = await create_dashboard(name="test_dashboard", definition="not valid json")
     assert "Error: Invalid JSON definition" in result
 
 
 @pytest.mark.asyncio
-async def test_delete_dashboard_invalid_name():
+async def test_delete_dashboard_invalid_name(write_mode):
     """Test delete_dashboard with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await delete_dashboard(name="123.invalid")
@@ -1132,3 +1342,86 @@ async def test_audit_uses_registered_tool_name(caplog):
         server.mcp.remove_tool("renamed_tool")
 
     assert "[AUDIT] renamed_tool" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_tool_parameter_descriptions_reach_sdk_schema():
+    tools = await server.mcp.list_tools()
+    for tool in tools:
+        for name, parameter in tool.input_schema["properties"].items():
+            assert parameter.get("description"), (tool.name, name)
+    dryrun = next(tool for tool in tools if tool.name == "dryrun_pipeline")
+    assert "data" in dryrun.input_schema["required"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_sql_reports_row_limit_truncation(monkeypatch, fmt, count):
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("SELECT"),
+        [(i, "name") for i in range(count)],
+    )
+    result = await execute_sql(query="SELECT id FROM users", limit=2, format=fmt)
+    if fmt == "json":
+        assert json.loads(result)["truncated"] is (count > 2)
+    else:
+        assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_tql_reports_read_limit_truncation(monkeypatch, fmt, count):
+    monkeypatch.setattr(server, "MAX_QUERY_LIMIT", 2)
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("TQL"),
+        [(i, "host", i) for i in range(count)],
+    )
+    result = await execute_tql(query="cpu", start="0", end="10", step="1s", format=fmt)
+    if fmt == "json":
+        data = json.loads(result)
+        assert data["row_count"] == 2
+        assert data["truncated"] is (count > 2)
+    else:
+        assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt", ["csv", "markdown", "json"])
+@pytest.mark.parametrize("count", [2, 3])
+async def test_range_reports_limit_truncation(monkeypatch, fmt, count):
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: "ALIGN" in q.upper(),
+        [("2024-01-01 00:00:00", "host", i) for i in range(count)],
+    )
+    result = await query_range(
+        table="t", select="ts, host, avg(v) RANGE '5m'", align="1m", limit=2, format=fmt
+    )
+    if fmt == "json":
+        data = json.loads(result)
+        assert data["row_count"] == 2
+        assert data["truncated"] is (count > 2)
+        # The mock ignores LIMIT; a database stops at it, so the probe row
+        # has to be asked for in the statement itself.
+        assert data["query"].endswith("LIMIT 3")
+    else:
+        assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["SHOW TABLES", "SHOW DATABASES"])
+@pytest.mark.parametrize("limit", [1, 2, 3])
+async def test_listing_truncation_advice_respects_limit_cap(monkeypatch, query, limit):
+    monkeypatch.setattr(server, "MAX_QUERY_LIMIT", 2)
+    _stub_query_rows(monkeypatch, lambda q: q == query, [("a",), ("b",), ("c",)])
+    result = await execute_sql(query=query, limit=limit)
+    assert "truncated" in result
+    if limit == 1:
+        assert "raise `limit` up to 2" in result
+    else:
+        assert "raise `limit`" not in result
+        assert "information_schema" in result

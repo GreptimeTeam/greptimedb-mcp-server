@@ -43,13 +43,28 @@ For Claude Desktop, add this to your config (`~/Library/Application Support/Clau
 | `execute_sql` | Execute SQL queries with format (csv/json/markdown) and limit options |
 | `execute_tql` | Execute TQL (PromQL-compatible) queries for time-series analysis |
 | `query_range` | Execute time-window aggregation queries with RANGE/ALIGN syntax |
-| `search_table_semantics` | Find tables by observability concept, ranked by matched terms; searches table names, semantic options, and entity declarations |
+| `search_table_semantics` | Find tables by observability concept, ranked by matched terms; searches table names, semantic options, and entity declarations. `schema` selects the database to search |
 | `query_semantic_graph` | Query the semantic graph: `summary` (what it contains), `entities` (nodes), `relationships` (edges) over a required time window |
 | `describe_table` | Inspect a table profile: schema, semantic metadata, latest sample rows, and query guidance |
 | `explain_query` | Analyze SQL or TQL query execution plans (`analyze=true` for runtime stats; add `verbose=true` alongside `analyze=true` for per-partition scan metrics and index-pruning counters) |
 | `health_check` | Check database connection status and server version |
 
 `search_table_semantics` and the semantic metadata in `describe_table` read `information_schema.table_semantics`. A table appears there when it carries a `greptime.semantic.*` option or a built-in convention derives an entity declaration for it; other tables are absent. The server reads the view's column list once per process and selects only the columns it exposes. `entity_declarations` requires GreptimeDB 1.3; on earlier versions it is reported as a missing column rather than as an empty declaration set.
+
+Tool results are bounded by `GREPTIMEDB_MAX_RESULT_BYTES` (default 262144). A query result over the budget returns fewer rows and reports it in `truncated` and `truncation_reason`; a result with no rows to shed is cut with a notice at the end. The budget is a backstop against a result too large to be consumed, so lower it if your MCP client rejects results before it is reached.
+
+### Cross-database queries
+
+The server connects to one database, but reads are not restricted to it:
+
+| Tool | How to reach another database |
+|------|-------------------------------|
+| `execute_sql`, `query_range`, `describe_table` | Qualify the table as `schema.table` |
+| `execute_tql` | `metric{__schema__="other_db"}`, which accepts `=` only |
+| `search_table_semantics` | Pass `schema` |
+| `query_semantic_graph` | Catalog-wide already; no scoping needed |
+
+The connected account needs read permission on the target database. Use `SHOW DATABASES` to list them.
 
 `query_semantic_graph` reads `greptime_private.semantic_entities` and `greptime_private.semantic_relationships`, which require GreptimeDB 1.3. At startup the server checks that both views exist, carry the columns it reads, and are readable by the connected account; when they are not, the tool is not offered and the reason is logged. Its time window is required and half-open, `[start_time, end_time)` over `observed_at`, and rows are aggregated across the 60-second observation buckets in that window.
 
@@ -98,7 +113,8 @@ GREPTIMEDB_POOL_SIZE=5         # Connection pool size
 GREPTIMEDB_MASK_ENABLED=true   # Enable sensitive data masking
 GREPTIMEDB_MASK_PATTERNS=      # Additional patterns (comma-separated)
 GREPTIMEDB_AUDIT_ENABLED=true  # Enable audit logging
-GREPTIMEDB_ALLOW_WRITE=false   # Allow write/DDL via execute_sql (DANGEROUS, local/test only)
+GREPTIMEDB_ALLOW_WRITE=false   # Allow writes: DDL/DML plus pipeline and dashboard changes (DANGEROUS, local/test only)
+GREPTIMEDB_MAX_RESULT_BYTES=262144 # Byte budget for a single tool result
 
 # Transport (for HTTP server mode)
 GREPTIMEDB_TRANSPORT=stdio     # stdio, sse, or streamable-http
@@ -177,9 +193,12 @@ All queries go through a security gate that:
 
 ### Write Mode (Disabled by Default)
 
-The server is **read-only by default**. For local development or testing, you can
-allow write/destructive SQL (DDL/DML such as `CREATE`, `DROP`, `ALTER`, `INSERT`,
-`UPDATE`, `DELETE`) through the `execute_sql` tool by enabling write mode:
+The server is **read-only by default**. Write mode enables every operation that
+changes stored state:
+
+- destructive SQL (DDL/DML such as `CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`,
+  `DELETE`) through `execute_sql`
+- `create_pipeline`, `delete_pipeline`, `create_dashboard`, `delete_dashboard`
 
 ```bash
 # Environment variable
@@ -190,7 +209,9 @@ greptimedb-mcp-server --allow-write true
 ```
 
 When enabled, the security gate is **bypassed** for `execute_sql`, and the server
-logs a warning on startup.
+logs a warning on startup. With write mode off, those four tools return an error
+without contacting the server; `list_pipelines`, `list_dashboards` and
+`dryrun_pipeline` are read-only and stay available.
 
 > ⚠️ **Danger**: This lets an AI assistant run destructive statements against your
 > database. Never enable it against production data. Combine with a read-only

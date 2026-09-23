@@ -9,8 +9,12 @@ if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-ht
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from greptimedb_mcp_server import graph, semantics
-from greptimedb_mcp_server.config import Config
-from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
+from greptimedb_mcp_server.config import Config, DEFAULT_MAX_RESULT_BYTES
+from greptimedb_mcp_server.formatter import (
+    format_results,
+    truncate_to_budget,
+    VALID_FORMATS,
+)
 from greptimedb_mcp_server.utils import (
     security_gate,
     templates_loader,
@@ -66,6 +70,7 @@ class AppState:
     mask_enabled: bool = True
     mask_patterns: list[str] = field(default_factory=list)
     allow_write: bool = False
+    max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
     pool: MySQLConnectionPool | None = field(default=None)
     http_session: aiohttp.ClientSession | None = field(default=None)
     table_semantics: semantics.SemanticsView = field(
@@ -127,13 +132,14 @@ def get_state() -> AppState:
 def _split_table_reference(table: str, default_schema: str) -> tuple[str, str]:
     """Split a possibly-qualified table reference into (schema, table).
 
-    Mirrors GreptimeDB's table_idents_to_full_name: the table name is always the
-    last segment, the schema the second-to-last. A leading catalog segment
-    (catalog.schema.table) is accepted for compatibility but ignored, since
-    information_schema is scoped to the connected catalog. Input is restricted to
-    at most three unquoted segments by validate_table_name.
+    Metadata queries are scoped to the connected catalog, so a catalog
+    qualifier cannot be honored.
     """
     parts = table.split(".")
+    if len(parts) == 3:
+        raise ValueError(
+            "Catalog-qualified names are not supported; use table or schema.table"
+        )
     if len(parts) == 1:
         return default_schema, parts[0]
     return parts[-2], parts[-1]
@@ -277,7 +283,8 @@ def _fetch_table_samples(
 
 def _build_table_guidance(schema: dict, profile: dict, samples: dict) -> list[str]:
     """Combine semantic query hints with hints about the profile itself."""
-    guidance = semantics.guidance(profile)
+    columns = [column["name"] for column in schema.get("columns", [])]
+    guidance = semantics.guidance(profile, columns)
     if samples.get("included") and samples.get("strategy") == "latest_by_time_index":
         guidance.append(
             f"Sample rows are ordered by time index {schema.get('time_index')} descending."
@@ -323,6 +330,7 @@ async def lifespan(mcp: MCPServer):
         mask_enabled=config.mask_enabled,
         mask_patterns=mask_patterns,
         allow_write=config.allow_write,
+        max_result_bytes=config.max_result_bytes,
         http_session=aiohttp.ClientSession(),
         semantic_graph=graph.GraphView(
             mask=graph.mask_patterns(config.mask_enabled, mask_patterns)
@@ -375,7 +383,12 @@ def tool(**tool_kwargs):
     The SDK reports any exception that is not a `ToolError` with a generic
     message, so validation failures are re-raised as `ToolError` to keep the
     reason visible to the client.
+
+    Structured output is off: every tool returns a string, so the SDK would
+    derive a `{"result": <string>}` schema and send the same bytes twice, as
+    text content and again as structuredContent.
     """
+    tool_kwargs.setdefault("structured_output", False)
 
     def decorator(fn):
         # The audited subject is the name the client called, which is the
@@ -394,7 +407,13 @@ def tool(**tool_kwargs):
                 _audit(name, arguments, start_time, e)
                 raise
             _audit(name, arguments, start_time)
-            return result
+            # Backstop: paths that can shed rows have already fitted
+            # themselves, so what reaches here has no structure left to shed.
+            return truncate_to_budget(
+                result,
+                get_state().max_result_bytes,
+                arguments.get("format") or "output",
+            )
 
         mcp.tool(**tool_kwargs)(wrapper)
         return wrapper
@@ -404,6 +423,107 @@ def tool(**tool_kwargs):
 
 # Query type constants
 _READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
+
+
+def _require_write(operation: str) -> None:
+    """Refuse a state-changing operation unless write mode is on.
+
+    The same flag gates DDL/DML in `execute_sql`; these tools reach the same
+    kind of change over HTTP rather than SQL.
+    """
+    if not get_state().allow_write:
+        raise ValueError(
+            f"{operation} changes stored server state and is refused in "
+            "read-only mode. Restart the server with --allow-write (or "
+            "GREPTIMEDB_ALLOW_WRITE=true) to allow it."
+        )
+
+
+def _fit(budget: int, render, count: int) -> str:
+    """Return the longest prefix of rows whose rendering fits the byte budget.
+
+    `render` takes a row count and returns the whole result, envelope
+    included, so the budget covers what is actually sent.
+
+    Bisects rather than scaling from the rendered size: one outsized row makes
+    a proportional estimate wrong in a way that never settles, and a rendering
+    left over budget is cut blind, losing the structure shedding exists to
+    keep. Below `count` every rendering carries the truncation notice, so size
+    is monotonic there and the search is well defined.
+    """
+    whole = render(count)
+    if len(whole.encode("utf-8")) <= budget or count == 0:
+        return whole
+
+    lo, hi, best = 0, count - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        text = render(mid)
+        if len(text.encode("utf-8")) <= budget:
+            best, lo = text, mid + 1
+        else:
+            hi = mid - 1
+    # Even an empty result can exceed a very small budget; the backstop cuts it.
+    return best if best is not None else render(0)
+
+
+def _process_bounded_rows(
+    columns: list,
+    rows: list,
+    format: str,
+    elapsed_ms: float,
+    remedy: str,
+    meta: dict[str, object] | None = None,
+    has_more: bool = False,
+) -> str:
+    """Render row results inside the byte budget without breaking JSON.
+
+    `meta` is the envelope fields that precede the data, such as the statement
+    a tool built. `remedy` is supplied per caller and must name only arguments
+    that caller has: a shared one sent `execute_tql` readers after a `limit`
+    it does not take. It states which arguments shrink the result, and claims
+    nothing about what a smaller result is worth answering with.
+    """
+    state = get_state()
+
+    def render(kept: int) -> str:
+        formatted = format_results(
+            columns,
+            rows[:kept],
+            format,
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
+        # Every format reports the shed, inside what gets measured: a quietly
+        # short result reads as the whole answer. Naming the budget separates
+        # it from having hit `limit`, which calls for a different fix.
+        dropped = len(rows) - kept
+        if format != "json":
+            if has_more:
+                formatted += f"\n[truncated: more rows matched than the {len(rows)}-row read limit]"
+            if dropped:
+                formatted += (
+                    f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
+                    f"fit the {state.max_result_bytes}-byte result budget. "
+                    f"{remedy}]"
+                )
+            return formatted
+
+        result = {
+            **(meta or {}),
+            "data": json.loads(formatted),
+            "row_count": kept,
+            "truncated": has_more or bool(dropped),
+            "execution_time_ms": round(elapsed_ms, 2),
+        }
+        if dropped:
+            result["truncation_reason"] = (
+                f"Dropped {dropped} of {len(rows)} rows read, to fit the "
+                f"{state.max_result_bytes}-byte result budget. {remedy}"
+            )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    return _fit(state.max_result_bytes, render, len(rows))
 
 
 def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
@@ -417,26 +537,15 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
     if result["type"] == "modify":
         return f"Query executed successfully. Rows affected: {result['rowcount']}"
 
-    # Handle query results
-    state = get_state()
-    formatted = format_results(
+    return _process_bounded_rows(
         result["columns"],
         result["rows"],
         format,
-        mask_enabled=state.mask_enabled,
-        mask_patterns=state.mask_patterns,
+        elapsed_ms,
+        "Selecting fewer columns can keep every row; narrowing `query` or "
+        "lowering `limit` returns a subset.",
+        has_more=result["has_more"],
     )
-
-    if format == "json":
-        meta = {
-            "data": json.loads(formatted),
-            "row_count": len(result["rows"]),
-            "truncated": result["has_more"],
-            "execution_time_ms": round(elapsed_ms, 2),
-        }
-        return json.dumps(meta, indent=2, ensure_ascii=False)
-
-    return formatted
 
 
 def _validate_sql_params(query: str, format: str, limit: int) -> int:
@@ -448,6 +557,31 @@ def _validate_sql_params(query: str, format: str, limit: int) -> int:
     return min(max(1, limit), MAX_QUERY_LIMIT)
 
 
+def _single_column_listing(cursor, limit: int, default_header: str) -> dict:
+    """Read a one-column listing, bounded by the same limit as any other read.
+
+    SHOW TABLES on a large instance returns every name; read whole, this was
+    the one path that ignored `limit`.
+    """
+    header = cursor.description[0][0] if cursor.description else default_header
+    rows = cursor.fetchmany(limit)
+    has_more = cursor.fetchone() is not None
+    if has_more:
+        # MySQL connector requires all results consumed before connection reuse
+        while cursor.fetchone():
+            pass
+
+    text = "\n".join([header, *(str(row[0]) for row in rows)])
+    if has_more:
+        advice = (
+            f"raise `limit` up to {MAX_QUERY_LIMIT} to see more"
+            if limit < MAX_QUERY_LIMIT
+            else "row limit reached; filter names with LIKE or query information_schema"
+        )
+        text += f"\n[truncated at {limit} rows; {advice}]"
+    return {"type": "simple", "text": text}
+
+
 def _execute_query(state: AppState, query: str, limit: int) -> dict:
     """Execute query synchronously and return result dict."""
     with state.get_connection() as conn:
@@ -456,20 +590,10 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
             stmt = query.strip().upper()
 
             if stmt.startswith("SHOW DATABASES"):
-                rows = cursor.fetchall()
-                header = cursor.description[0][0] if cursor.description else "Database"
-                return {
-                    "type": "simple",
-                    "text": header + "\n" + "\n".join(r[0] for r in rows),
-                }
+                return _single_column_listing(cursor, limit, "Database")
 
             if stmt.startswith("SHOW TABLES"):
-                rows = cursor.fetchall()
-                header = cursor.description[0][0] if cursor.description else "Tables"
-                return {
-                    "type": "simple",
-                    "text": header + "\n" + "\n".join(r[0] for r in rows),
-                }
+                return _single_column_listing(cursor, limit, "Tables")
 
             if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
                 if cursor.description is None:
@@ -494,17 +618,37 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
 
 @tool()
 async def execute_sql(
-    query: Annotated[str, "The SQL query to execute (using MySQL dialect)"],
+    query: Annotated[
+        str, Field(description="The SQL query to execute (using MySQL dialect)")
+    ],
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: csv)"
+        str, Field(description="Output format: csv, json, or markdown (default: csv)")
     ] = "csv",
-    limit: Annotated[int, "Maximum number of rows to return (default: 1000)"] = 1000,
+    limit: Annotated[
+        int,
+        Field(description="Maximum rows to return, clamped to 1-10000 (default: 1000)"),
+    ] = 1000,
 ) -> str:
     """Execute SQL query against GreptimeDB. Please use MySQL dialect.
+
+    The general query entry point: use it for logs, traces, events, joins
+    across tables, and metadata queries such as SHOW TABLES. For a plain
+    metric time series prefer execute_tql, where the table name is the metric
+    name and PromQL states rate, increase and quantile directly.
+
+    Qualify a table as `schema.table` to read a database other than the one
+    this server connected to; the account needs read permission on it.
 
     Read-only by default. When the server runs with write mode enabled
     (--allow-write / GREPTIMEDB_ALLOW_WRITE), destructive SQL (DDL/DML) is
     also permitted.
+
+    Results are bounded by a byte budget and a row limit clamped to 1-10000.
+    JSON row results report `truncated`; `truncation_reason` describes rows
+    dropped for the byte budget. CSV and Markdown report truncation in a text
+    notice. Lowering `limit` or narrowing filters does not make the original
+    result complete. SHOW TABLES and SHOW DATABASES return plain text regardless
+    of format.
     """
     state = get_state()
     limit = _validate_sql_params(query, format, limit)
@@ -530,20 +674,31 @@ async def execute_sql(
 async def describe_table(
     table: Annotated[
         str,
-        "Table name to describe (supports table, schema.table, or "
-        "catalog.schema.table format)",
+        Field(
+            description=(
+                "Unquoted table or schema.table name. Catalog qualifiers are not supported."
+            )
+        ),
     ],
     include_semantics: Annotated[
         bool,
-        "Include table semantic metadata from information_schema.table_semantics",
+        Field(
+            description=(
+                "Include table semantic metadata from information_schema.table_semantics"
+            )
+        ),
     ] = True,
     include_samples: Annotated[
         bool,
-        "Include a small sample of table rows for context",
+        Field(description="Include a small sample of table rows for context"),
     ] = True,
     sample_limit: Annotated[
         int,
-        f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)",
+        Field(
+            description=(
+                f"Maximum sample rows to return (0-{MAX_SAMPLE_LIMIT}, default: 5)"
+            )
+        ),
     ] = 5,
 ) -> str:
     """Get a table profile: schema, semantic metadata, sample rows, and guidance.
@@ -635,17 +790,38 @@ async def describe_table(
 async def search_table_semantics(
     query: Annotated[
         str,
-        "Telemetry concepts to search for, such as 'redis memory usage' or "
-        "'request latency'",
+        Field(
+            description=(
+                "Telemetry concepts to search for, such as 'redis memory usage' or "
+                "'request latency'"
+            )
+        ),
     ],
     signal_type: Annotated[
         str | None,
-        "Restrict results to one signal type: "
-        f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
-        "was never stamped are excluded by this filter.",
+        Field(
+            description=(
+                "Restrict results to one signal type: "
+                f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
+                "was never stamped are excluded by this filter."
+            )
+        ),
+    ] = None,
+    schema: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Database to search. Defaults to the one this server is connected to."
+            )
+        ),
     ] = None,
     limit: Annotated[
-        int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+        int,
+        Field(
+            description=(
+                f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
+            )
+        ),
     ] = semantics.MAX_SEARCH_LIMIT,
 ) -> str:
     """Find tables by observability concept when the right table name is unknown.
@@ -661,8 +837,8 @@ async def search_table_semantics(
     it returns candidates, query their data or describe one of them; do not
     describe every candidate in turn.
 
-    It covers only the database this server is connected to, unlike
-    describe_table, which accepts a schema-qualified name.
+    It searches one database at a time: the connected one by default, or the
+    one named by `schema`. Use SHOW DATABASES to see what else is there.
 
     Only tables carrying a `greptime.semantic.*` option, or one a built-in
     convention derives a declaration for, are visible here. A table absent from
@@ -671,13 +847,12 @@ async def search_table_semantics(
     """
     state = get_state()
     request = semantics.SearchRequest.parse(query, signal_type, limit)
+    table_schema = schema or state.db_config["database"]
 
     def _sync_search():
         with state.get_connection() as conn:
             with conn.cursor() as cursor:
-                return state.table_semantics.search(
-                    cursor, state.db_config["database"], request
-                )
+                return state.table_semantics.search(cursor, table_schema, request)
 
     try:
         result = await asyncio.to_thread(_sync_search)
@@ -794,14 +969,18 @@ async def query_semantic_graph(
         Field(
             description=(
                 "relationships only: how the edge was obtained -- trace "
-                "(paired spans), attribute (identities on one row), declared, "
+                "(span-derived), attribute (identities on one row), declared, "
                 "or agent."
             )
         ),
     ] = None,
     limit: Annotated[
         int,
-        Field(description="Maximum rows to return.", ge=1, le=graph.MAX_LIMIT),
+        Field(
+            description="Maximum rows for entities or relationships; ignored for summary.",
+            ge=1,
+            le=graph.MAX_LIMIT,
+        ),
     ] = graph.DEFAULT_LIMIT,
 ) -> str:
     """Query the semantic graph: which entities exist and which are related.
@@ -812,28 +991,30 @@ async def query_semantic_graph(
     entities or relationships directly.
 
     The window is required and half-open, [start_time, end_time), over
-    observed_at -- the 60-second bucket an observation was recorded in. Rows
-    are aggregated across the buckets in the window, and the result echoes the
-    window and the limit it used.
+    observed_at. Derived observations use 60-second buckets. Declared edges
+    instead reflect validity overlapping the window: observed_at is the later
+    of the validity start and the window start, not a measured event time.
 
-    relationships returns one row per edge per confidence. The database reports
-    confidence 1.0 for a bucket whose client and server spans paired and 0.5
-    for one where only the client was seen, and it switches request_count,
-    error_count and the durations to whichever population that bucket
-    describes: paired requests timed by the server span, or unmatched clients
+    relationships groups by endpoints, relationship type, provenance, and
+    confidence. For trace-derived calls, the database reports confidence 1.0
+    for a bucket whose client and server spans paired and 0.5 for one where
+    only the client was seen, and it switches request_count, error_count and
+    the durations to whichever population that bucket describes: paired
+    requests timed by the server span, or unmatched clients
     timed by their own. An edge observed both ways therefore comes back as two
     rows. unmatched_count reports client spans with no paired server span.
-    Durations are in seconds.
+    Durations are in seconds. Attribute-derived edges describe identities
+    observed together, not measured calls. Declared edges retain their supplied
+    confidence and counts; these are assertions, not span-pairing evidence.
 
     entities returns one row per distinct set of attributes, so an entity whose
     descriptive attributes changed inside the window appears more than once;
     item_count counts rows, not entities. first_seen and last_seen bound where
     the row was observed inside this window, not when the entity first existed.
 
-    Ordering is by type and endpoint. Only `calls` edges carry request, error
-    and duration counts, so pass rel_type=calls to order by error and request
-    count instead. When complete is false, more rows matched than the limit and
-    later types may be absent entirely rather than merely cut short.
+    Ordering is by type and endpoint. Pass rel_type=calls to order by error
+    and request count instead. When complete is false, more rows matched than
+    the limit and later types may be absent entirely rather than merely cut short.
 
     A missing edge is not evidence that two entities are unrelated: it can also
     mean the call was not instrumented, was sampled out, or fell outside this
@@ -941,26 +1122,63 @@ async def health_check() -> str:
 async def execute_tql(
     query: Annotated[
         str,
-        "PromQL-compatible expression. Supports standard PromQL syntax: "
-        "rate(), increase(), sum(), avg(), histogram_quantile(), etc. "
-        "Example: rate(http_requests_total[5m])",
+        Field(
+            description=(
+                "PromQL-compatible expression. Supports standard PromQL syntax: "
+                "rate(), increase(), sum(), avg(), histogram_quantile(), etc. "
+                "Example: rate(http_requests_total[5m])"
+            )
+        ),
     ],
     start: Annotated[
         str,
-        "Start time: SQL expression (e.g., \"now() - interval '5' minute\"), "
-        "RFC3339 (e.g., '2024-01-01T00:00:00Z'), or Unix timestamp",
+        Field(
+            description=(
+                "Start time: SQL expression (e.g., \"now() - interval '5' minute\"), "
+                "RFC3339 (e.g., '2024-01-01T00:00:00Z'), or Unix timestamp"
+            )
+        ),
     ],
     end: Annotated[
         str,
-        "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp",
+        Field(
+            description=(
+                "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp"
+            )
+        ),
     ],
-    step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
-    lookback: Annotated[str | None, "Lookback delta for range queries"] = None,
+    step: Annotated[
+        str, Field(description="Query resolution step, e.g., '1m', '5m', '1h'")
+    ],
+    lookback: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Lookback delta: how far back a sample may be reused when a step "
+                "lands where there is no sample, e.g. '5m'. Defaults to 5m."
+            )
+        ),
+    ] = None,
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: json)"
+        str,
+        Field(description="Output format: csv, json, or markdown (default: json)"),
     ] = "json",
 ) -> str:
-    """Execute TQL query for time-series analysis. TQL is PromQL-compatible - use standard PromQL syntax."""
+    """Execute TQL query for time-series analysis. TQL is PromQL-compatible.
+
+    Use it for metric tables, where the table name is the metric name and the
+    value columns are the PromQL fields. PromQL vector matching can combine
+    metrics from different tables. Use execute_sql for log or event rows,
+    trace analysis, and SQL JOINs.
+
+    `metric{__schema__="other_db"}` reads a database other than the connected
+    one. That matcher accepts `=` only.
+
+    Returns at most 10000 rows, also bounded by a byte budget. JSON reports
+    `truncated`; CSV and Markdown append a truncation notice. A shorter time
+    range or fewer series changes coverage; a larger step lowers resolution.
+    An untruncated retry with those changes does not cover the original query.
+    """
     state = get_state()
 
     if not all([query, start, end, step]):
@@ -993,29 +1211,26 @@ async def execute_tql(
                 cursor.execute(tql)
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchmany(MAX_QUERY_LIMIT)
-                return columns, rows
+                has_more = cursor.fetchone() is not None
+                if has_more:
+                    # Consume the result before returning the pooled connection.
+                    while cursor.fetchone() is not None:
+                        pass
+                return columns, rows, has_more
 
     try:
-        columns, rows = await asyncio.to_thread(_sync_tql)
+        columns, rows, has_more = await asyncio.to_thread(_sync_tql)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(
+        return _process_bounded_rows(
             columns,
             rows,
             format,
-            mask_enabled=state.mask_enabled,
-            mask_patterns=state.mask_patterns,
+            elapsed_ms,
+            "A larger `step` lowers resolution; a shorter time range or fewer "
+            "series reduces coverage. Neither recovers the complete original result.",
+            meta={"tql": tql},
+            has_more=has_more,
         )
-
-        if format == "json":
-            meta = {
-                "tql": tql,
-                "data": json.loads(formatted),
-                "row_count": len(rows),
-                "execution_time_ms": round(elapsed_ms, 2),
-            }
-            return json.dumps(meta, indent=2, ensure_ascii=False)
-
-        return formatted
 
     except Error as e:
         logger.error(f"Error executing TQL '{tql}': {e}")
@@ -1024,21 +1239,52 @@ async def execute_tql(
 
 @tool()
 async def query_range(
-    table: Annotated[str, "Table name to query (supports schema.table format)"],
-    select: Annotated[
-        str, "Columns and aggregations, e.g., 'ts, host, avg(cpu) RANGE \\'5m\\''"
+    table: Annotated[
+        str, Field(description="Table name to query (supports schema.table format)")
     ],
-    align: Annotated[str, "Alignment interval, e.g., '1m', '5m'"],
-    by: Annotated[str | None, "Group by columns, e.g., 'host'"] = None,
-    where: Annotated[str | None, "WHERE clause conditions"] = None,
-    fill: Annotated[str | None, "Fill strategy: NULL, PREV, LINEAR, or a value"] = None,
-    order_by: Annotated[str | None, "ORDER BY clause (e.g., 'ts DESC')"] = None,
+    select: Annotated[
+        str,
+        Field(
+            description=(
+                "Columns and aggregations, e.g., ts, host, avg(cpu) RANGE '5m'"
+            )
+        ),
+    ],
+    align: Annotated[str, Field(description="Alignment interval, e.g., '1m', '5m'")],
+    by: Annotated[
+        str | None, Field(description="Group by columns, e.g., 'host'")
+    ] = None,
+    where: Annotated[str | None, Field(description="WHERE clause conditions")] = None,
+    fill: Annotated[
+        str | None, Field(description="Fill strategy: NULL, PREV, LINEAR, or a value")
+    ] = None,
+    order_by: Annotated[
+        str | None, Field(description="ORDER BY clause (e.g., 'ts DESC')")
+    ] = None,
     format: Annotated[
-        str, "Output format: csv, json, or markdown (default: json)"
+        str,
+        Field(description="Output format: csv, json, or markdown (default: json)"),
     ] = "json",
-    limit: Annotated[int, "Maximum rows to return"] = 1000,
+    limit: Annotated[
+        int, Field(description="Maximum rows to return, clamped to 1-10000")
+    ] = 1000,
 ) -> str:
-    """Execute time-window aggregation query using GreptimeDB's RANGE query syntax."""
+    """Execute time-window aggregation query using GreptimeDB's RANGE query syntax.
+
+    The narrowest of the three query entry points. Use it for a window
+    aggregation over a non-metric table, or an alignment PromQL cannot state;
+    a metric time series is better served by execute_tql and anything else by
+    execute_sql.
+
+    `select` must carry at least one aggregate with its own RANGE, such as
+    `avg(cpu) RANGE '5m'`, and `align` supplies the step between windows. A
+    plain column list does not plan. `table` accepts `schema.table` to read a
+    database other than the connected one.
+
+    A larger align lowers resolution; tighter filters or a lower limit return
+    a subset. An untruncated retry with those changes does not cover the
+    original query.
+    """
     state = get_state()
 
     if not all([table, select, align]):
@@ -1071,7 +1317,9 @@ async def query_range(
     if order_by:
         query_parts.append(f"ORDER BY {order_by}")
 
-    query_parts.append(f"LIMIT {limit}")
+    # One row past the limit: with LIMIT N the database never says whether
+    # more matched, and the result would claim `truncated: false` when cut.
+    query_parts.append(f"LIMIT {limit + 1}")
 
     query = " ".join(query_parts)
 
@@ -1086,30 +1334,22 @@ async def query_range(
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchmany(limit)
-                return columns, rows
+                rows = cursor.fetchmany(limit + 1)
+                return columns, rows[:limit], len(rows) > limit
 
     try:
-        columns, rows = await asyncio.to_thread(_sync_range)
+        columns, rows, has_more = await asyncio.to_thread(_sync_range)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(
+        return _process_bounded_rows(
             columns,
             rows,
             format,
-            mask_enabled=state.mask_enabled,
-            mask_patterns=state.mask_patterns,
+            elapsed_ms,
+            "A larger `align` lowers resolution; tighter `where` or lower `limit` "
+            "returns a subset, not the complete original result.",
+            meta={"query": query},
+            has_more=has_more,
         )
-
-        if format == "json":
-            meta = {
-                "query": query,
-                "data": json.loads(formatted),
-                "row_count": len(rows),
-                "execution_time_ms": round(elapsed_ms, 2),
-            }
-            return json.dumps(meta, indent=2, ensure_ascii=False)
-
-        return formatted
 
     except Error as e:
         logger.error(f"Error executing range query '{query}': {e}")
@@ -1118,14 +1358,26 @@ async def query_range(
 
 @tool()
 async def explain_query(
-    query: Annotated[str, "SQL or TQL query to analyze"],
-    analyze: Annotated[bool, "Execute and show actual metrics"] = False,
+    query: Annotated[
+        str,
+        Field(
+            description="Original SQL query or full TQL EVAL (...) <PromQL> statement. "
+            "Do not include EXPLAIN or ANALYZE wrappers."
+        ),
+    ],
+    analyze: Annotated[
+        bool, Field(description="Execute and show actual metrics")
+    ] = False,
     verbose: Annotated[
         bool,
-        "Show detailed per-partition scan metrics; combine with "
-        "analyze=true to reveal index-pruning counters "
-        "(rg_bloom_filtered, rg_inverted_filtered, rg_minmax_filtered, "
-        "rows_bloom_filtered, rows_inverted_filtered)",
+        Field(
+            description=(
+                "Show detailed per-partition scan metrics; combine with "
+                "analyze=true to reveal index-pruning counters "
+                "(rg_bloom_filtered, rg_inverted_filtered, rg_minmax_filtered, "
+                "rows_bloom_filtered, rows_inverted_filtered)"
+            )
+        ),
     ] = False,
 ) -> str:
     """Analyze SQL or TQL query execution plan."""
@@ -1235,7 +1487,9 @@ def _format_pipeline_version(ns_timestamp: int) -> str:
 
 @tool()
 async def list_pipelines(
-    name: Annotated[str | None, "Optional pipeline name to filter by"] = None,
+    name: Annotated[
+        str | None, Field(description="Optional pipeline name to filter by")
+    ] = None,
 ) -> str:
     """List all pipelines or get details of a specific pipeline."""
     state = get_state()
@@ -1290,10 +1544,17 @@ async def list_pipelines(
 
 @tool()
 async def create_pipeline(
-    name: Annotated[str, "Name of the pipeline to create"],
-    pipeline: Annotated[str, "Pipeline configuration in YAML format"],
+    name: Annotated[str, Field(description="Name of the pipeline to create")],
+    pipeline: Annotated[
+        str, Field(description="Pipeline configuration in YAML format")
+    ],
 ) -> str:
-    """Create a new pipeline in GreptimeDB."""
+    """Create a new pipeline in GreptimeDB.
+
+    Stores a new version of the pipeline; it does not replace existing ones.
+    Refused unless the server runs with write mode enabled.
+    """
+    _require_write("create_pipeline")
     state = get_state()
     name = _validate_pipeline_name(name)
 
@@ -1332,20 +1593,35 @@ async def create_pipeline(
 
 @tool()
 async def dryrun_pipeline(
+    data: Annotated[
+        str,
+        Field(
+            description="Test data in JSON or NDJSON format (single object or array)"
+        ),
+    ],
     pipeline: Annotated[
         str | None,
-        "Pipeline configuration in YAML format (inline). Provide this to test a pipeline without saving it.",
+        Field(
+            description=(
+                "Pipeline configuration in YAML format (inline). Provide this to test a pipeline without saving it."
+            )
+        ),
     ] = None,
     pipeline_name: Annotated[
         str | None,
-        "Name of the saved pipeline to test. Provide either 'pipeline' or 'pipeline_name', not both.",
+        Field(
+            description=(
+                "Name of the saved pipeline to test. Provide either 'pipeline' or 'pipeline_name', not both."
+            )
+        ),
     ] = None,
-    data: Annotated[
-        str, "Test data in JSON or NDJSON format (single object or array)"
-    ] = "",
     data_type: Annotated[
         str | None,
-        "Content type of the data (e.g., 'application/x-ndjson'). If omitted, GreptimeDB will use default.",
+        Field(
+            description=(
+                "Content type of the data (e.g., 'application/x-ndjson'). If omitted, GreptimeDB will use default."
+            )
+        ),
     ] = None,
 ) -> str:
     """Test a pipeline with sample data without writing to the database.
@@ -1416,10 +1692,16 @@ async def dryrun_pipeline(
 
 @tool()
 async def delete_pipeline(
-    name: Annotated[str, "Name of the pipeline to delete"],
-    version: Annotated[str, "Version of the pipeline to delete (timestamp)"],
+    name: Annotated[str, Field(description="Name of the pipeline to delete")],
+    version: Annotated[
+        str, Field(description="Version of the pipeline to delete (timestamp)")
+    ],
 ) -> str:
-    """Delete a specific version of a pipeline from GreptimeDB."""
+    """Delete a specific version of a pipeline from GreptimeDB.
+
+    Irreversible, and refused unless the server runs with write mode enabled.
+    """
+    _require_write("delete_pipeline")
     state = get_state()
     name = _validate_pipeline_name(name)
 
@@ -1491,10 +1773,17 @@ async def list_dashboards() -> str:
 
 @tool()
 async def create_dashboard(
-    name: Annotated[str, "Name of the dashboard"],
-    definition: Annotated[str, "Perses dashboard definition in JSON format"],
+    name: Annotated[str, Field(description="Name of the dashboard")],
+    definition: Annotated[
+        str, Field(description="Perses dashboard definition in JSON format")
+    ],
 ) -> str:
-    """Create or update a Perses dashboard definition in GreptimeDB."""
+    """Create or update a Perses dashboard definition in GreptimeDB.
+
+    Overwrites any dashboard already stored under this name. Refused unless
+    the server runs with write mode enabled.
+    """
+    _require_write("create_dashboard")
     state = get_state()
     name = _validate_dashboard_name(name)
 
@@ -1529,9 +1818,13 @@ async def create_dashboard(
 
 @tool()
 async def delete_dashboard(
-    name: Annotated[str, "Name of the dashboard to delete"],
+    name: Annotated[str, Field(description="Name of the dashboard to delete")],
 ) -> str:
-    """Delete a Perses dashboard definition from GreptimeDB."""
+    """Delete a Perses dashboard definition from GreptimeDB.
+
+    Irreversible, and refused unless the server runs with write mode enabled.
+    """
+    _require_write("delete_dashboard")
     state = get_state()
     name = _validate_dashboard_name(name)
 
