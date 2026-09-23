@@ -120,13 +120,23 @@ async def test_state_changing_tools_refused_in_read_only(call):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_sheds_rows_to_fit_byte_budget():
-    """An oversized result loses rows but stays parseable and says why."""
-    server._state.max_result_bytes = 250
+async def test_execute_sql_sheds_rows_to_fit_byte_budget(monkeypatch):
+    """An oversized result loses rows but stays parseable and says why.
+
+    Rows are wider than the truncation notice, so shedding them actually
+    shrinks the result; with narrower rows no shed rendering can fit.
+    """
+    server._state.max_result_bytes = 1200
+    _stub_query_rows(
+        monkeypatch,
+        lambda q: q.startswith("SELECT"),
+        [(i, "x" * 200, "2024-01-01 00:00:00") for i in range(10)],
+    )
     result = await execute_sql(query="SELECT * FROM users", format="json")
 
     meta = json.loads(result)
-    assert meta["row_count"] < 2
+    assert len(result.encode("utf-8")) <= 1200
+    assert 0 < meta["row_count"] < 10
     assert meta["truncated"] is True
     assert "result budget" in meta["truncation_reason"]
 

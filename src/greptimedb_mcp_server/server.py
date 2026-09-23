@@ -542,7 +542,8 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
         result["rows"],
         format,
         elapsed_ms,
-        "Narrow `query` or lower `limit` for a subset, not the complete result.",
+        "Selecting fewer columns can keep every row; narrowing `query` or "
+        "lowering `limit` returns a subset.",
         has_more=result["has_more"],
     )
 
