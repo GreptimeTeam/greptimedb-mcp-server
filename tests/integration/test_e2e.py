@@ -280,22 +280,23 @@ async def test_dashboard_lifecycle(seed):
     assert "deleted successfully" in deleted
 
 
-async def test_read_only_refuses_state_changing_tools(seed):
-    """The gate has to hold over the wire, not just in-process.
+async def test_read_only_refuses_writes_without_reaching_the_server(seed):
+    """The refusal has to land before GreptimeDB is touched.
 
-    A default server is the one users are told they get, so the refusal is
-    checked on exactly that, and before the request reaches GreptimeDB.
+    The in-process tests show the gate raises; only a real instance shows
+    nothing was written behind it.
     """
+    name = "it_gated_dashboard"
+    definition = json.dumps({"kind": "Dashboard", "metadata": {"name": name}})
     async with stdio_session() as client:
-        for name, arguments in (
-            ("create_pipeline", {"name": "it_gated", "pipeline": PIPELINE_YAML}),
-            ("delete_pipeline", {"name": "it_gated", "version": "2024-01-01"}),
-            ("create_dashboard", {"name": "it_gated", "definition": "{}"}),
-            ("delete_dashboard", {"name": "it_gated"}),
-        ):
-            result = await client.call_tool(name, arguments)
-            assert result.is_error, name
-            assert "read-only mode" in result.content[0].text, name
+        refused = await client.call_tool(
+            "create_dashboard", {"name": name, "definition": definition}
+        )
+        assert refused.is_error
+        assert "read-only mode" in refused.content[0].text
+
+        listed = json.loads(await call_text(client, "list_dashboards"))
+    assert not any(d["name"] == name for d in listed["dashboards"])
 
 
 async def test_prompts_render(seed):

@@ -625,7 +625,7 @@ def test_audit_log_never_raises():
 
 def test_truncate_to_budget_leaves_a_fitting_result_alone():
     text = "small enough"
-    assert truncate_to_budget(text, 1024) == text
+    assert truncate_to_budget(text, 1024, "csv") == text
 
 
 def test_truncate_to_budget_holds_the_budget_and_says_it_cut():
@@ -638,7 +638,7 @@ def test_truncate_to_budget_holds_the_budget_and_says_it_cut():
 
 def test_truncate_to_budget_does_not_split_a_character():
     """A cut landing inside a multi-byte character must not corrupt it."""
-    result = truncate_to_budget("中" * 2000, 600)
+    result = truncate_to_budget("中" * 2000, 600, "csv")
 
     assert len(result.encode("utf-8")) <= 600
     result.encode("utf-8").decode("utf-8")  # raises if a character was split

@@ -383,11 +383,9 @@ def tool(**tool_kwargs):
     message, so validation failures are re-raised as `ToolError` to keep the
     reason visible to the client.
 
-    Structured output is off. Every tool here returns a string, so the SDK
-    would derive a `{"result": <string>}` schema and send the same bytes twice,
-    once as text content and once as structuredContent -- doubling the
-    response for a wrapper that carries nothing the text does not, and putting
-    the byte budget at half of what actually goes over the wire.
+    Structured output is off: every tool returns a string, so the SDK would
+    derive a `{"result": <string>}` schema and send the same bytes twice, as
+    text content and again as structuredContent.
     """
     tool_kwargs.setdefault("structured_output", False)
 
@@ -408,9 +406,8 @@ def tool(**tool_kwargs):
                 _audit(name, arguments, start_time, e)
                 raise
             _audit(name, arguments, start_time)
-            # Last line of defence for every tool. Paths that can shed rows
-            # cut themselves first, so what reaches here is either already
-            # within budget or has no row structure to shed.
+            # Backstop: paths that can shed rows have already fitted
+            # themselves, so what reaches here has no structure left to shed.
             return truncate_to_budget(
                 result,
                 get_state().max_result_bytes,
@@ -430,9 +427,8 @@ _READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
 def _require_write(operation: str) -> None:
     """Refuse a state-changing operation unless write mode is on.
 
-    `execute_sql` gates DDL/DML behind the same flag. Without this, a server
-    started read-only would still let a caller create and delete pipelines and
-    dashboards over HTTP.
+    The same flag gates DDL/DML in `execute_sql`; these tools reach the same
+    kind of change over HTTP rather than SQL.
     """
     if not get_state().allow_write:
         raise ValueError(
@@ -446,35 +442,28 @@ def _fit(budget: int, render, count: int) -> str:
     """Return the longest prefix of rows whose rendering fits the byte budget.
 
     `render` takes a row count and returns the whole result, envelope
-    included, so the budget covers what is actually sent rather than the rows
-    alone. Shedding rows keeps the result well-formed, which the blind cut in
-    `truncate_to_budget` cannot.
+    included, so the budget covers what is actually sent.
 
     Bisects rather than scaling from the rendered size: one outsized row makes
-    a proportional estimate wrong in a way that does not settle within any
-    fixed number of rounds, and a rendering that never comes under budget gets
-    cut blind, losing the structure shedding exists to keep. Below `count`
-    every rendering carries the truncation notice, so size is monotonic in the
-    row count there and the search is well defined.
+    a proportional estimate wrong in a way that never settles, and a rendering
+    left over budget is cut blind, losing the structure shedding exists to
+    keep. Below `count` every rendering carries the truncation notice, so size
+    is monotonic there and the search is well defined.
     """
     whole = render(count)
-    if _byte_len(whole) <= budget or count == 0:
+    if len(whole.encode("utf-8")) <= budget or count == 0:
         return whole
 
     lo, hi, best = 0, count - 1, None
     while lo <= hi:
         mid = (lo + hi) // 2
         text = render(mid)
-        if _byte_len(text) <= budget:
+        if len(text.encode("utf-8")) <= budget:
             best, lo = text, mid + 1
         else:
             hi = mid - 1
     # Even an empty result can exceed a very small budget; the backstop cuts it.
     return best if best is not None else render(0)
-
-
-def _byte_len(text: str) -> int:
-    return len(text.encode("utf-8"))
 
 
 def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
@@ -500,10 +489,9 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
             mask_enabled=state.mask_enabled,
             mask_patterns=state.mask_patterns,
         )
-        # Every format has to carry the shed, and carry it inside what gets
-        # measured: a result that is quietly short is read as the whole
-        # answer. Naming the budget separates this from having hit `limit`,
-        # which calls for a different fix.
+        # Every format reports the shed, inside what gets measured: a quietly
+        # short result reads as the whole answer. Naming the budget separates
+        # it from having hit `limit`, which calls for a different fix.
         dropped = len(rows) - kept
         if format != "json":
             if dropped:

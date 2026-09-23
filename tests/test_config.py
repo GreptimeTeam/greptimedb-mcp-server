@@ -2,11 +2,7 @@ import os
 from unittest.mock import patch
 import pytest
 
-from greptimedb_mcp_server.config import (
-    Config,
-    MIN_RESULT_BYTES,
-    _parse_comma_separated,
-)
+from greptimedb_mcp_server.config import Config, _parse_comma_separated
 
 
 def test_config_default_values():
@@ -247,13 +243,6 @@ def test_config_max_result_bytes_from_env():
     with patch.dict(os.environ, {"GREPTIMEDB_MAX_RESULT_BYTES": "4096"}, clear=True):
         with patch("sys.argv", ["script_name"]):
             assert Config.from_env_arguments().max_result_bytes == 4096
-
-
-def test_config_max_result_bytes_floor():
-    """A budget below the floor would make every result a bare notice."""
-    with patch.dict(os.environ, {"GREPTIMEDB_MAX_RESULT_BYTES": "1"}, clear=True):
-        with patch("sys.argv", ["script_name"]):
-            assert Config.from_env_arguments().max_result_bytes == MIN_RESULT_BYTES
 
 
 class TestParseCommaSeparated:

@@ -3,14 +3,11 @@ from dataclasses import dataclass
 import os
 
 # A backstop against a result no caller could consume, not a shaper of normal
-# ones. A 1000-row read -- the default `limit` -- measures about 79KB of JSON
-# for a 3-column metric table and 256KB for an 8-column log table, so a
-# tighter budget would truncate ordinary log and trace queries rather than
-# catch pathological ones. A 29-column trace table still exceeds this at 1MB,
-# which is the case worth cutting. Lower it with --max-result-bytes for a
-# client that accepts less.
+# ones. Measured as JSON at the default `limit` of 1000 rows: 79KB for a
+# 3-column metric table, 256KB for 8-column logs, 1MB for 29-column traces.
+# A tighter budget would cut ordinary log and trace reads, not pathological
+# ones.
 DEFAULT_MAX_RESULT_BYTES = 256 * 1024
-MIN_RESULT_BYTES = 1024
 
 
 @dataclass
@@ -299,7 +296,7 @@ class Config:
             allow_write=args.allow_write,
             allowed_hosts=_parse_comma_separated(args.allowed_hosts),
             allowed_origins=_parse_comma_separated(args.allowed_origins),
-            max_result_bytes=max(MIN_RESULT_BYTES, args.max_result_bytes),
+            max_result_bytes=args.max_result_bytes,
         )
 
 
