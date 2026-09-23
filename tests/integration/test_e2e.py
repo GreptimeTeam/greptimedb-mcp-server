@@ -229,7 +229,7 @@ transform:
 
 async def test_pipeline_lifecycle(seed):
     name = "it_lifecycle_pipeline"
-    async with stdio_session() as client:
+    async with stdio_session(**{"--allow-write": "true"}) as client:
         created = await call_text(
             client, "create_pipeline", {"name": name, "pipeline": PIPELINE_YAML}
         )
@@ -266,7 +266,7 @@ async def test_dashboard_lifecycle(seed):
     definition = json.dumps(
         {"kind": "Dashboard", "metadata": {"name": name}, "spec": {"panels": {}}}
     )
-    async with stdio_session() as client:
+    async with stdio_session(**{"--allow-write": "true"}) as client:
         created = await call_text(
             client, "create_dashboard", {"name": name, "definition": definition}
         )
@@ -278,6 +278,24 @@ async def test_dashboard_lifecycle(seed):
         finally:
             deleted = await call_text(client, "delete_dashboard", {"name": name})
     assert "deleted successfully" in deleted
+
+
+async def test_read_only_refuses_state_changing_tools(seed):
+    """The gate has to hold over the wire, not just in-process.
+
+    A default server is the one users are told they get, so the refusal is
+    checked on exactly that, and before the request reaches GreptimeDB.
+    """
+    async with stdio_session() as client:
+        for name, arguments in (
+            ("create_pipeline", {"name": "it_gated", "pipeline": PIPELINE_YAML}),
+            ("delete_pipeline", {"name": "it_gated", "version": "2024-01-01"}),
+            ("create_dashboard", {"name": "it_gated", "definition": "{}"}),
+            ("delete_dashboard", {"name": "it_gated"}),
+        ):
+            result = await client.call_tool(name, arguments)
+            assert result.is_error, name
+            assert "read-only mode" in result.content[0].text, name
 
 
 async def test_prompts_render(seed):
