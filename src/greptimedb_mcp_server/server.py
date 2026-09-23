@@ -478,8 +478,10 @@ def _process_bounded_rows(
     """Render row results inside the byte budget without breaking JSON.
 
     `meta` is the envelope fields that precede the data, such as the statement
-    a tool built. `remedy` names the arguments that caller actually has, so a
-    shed result does not send the reader after a parameter the tool lacks.
+    a tool built. `remedy` is supplied per caller and must name only arguments
+    that caller has: a shared one sent `execute_tql` readers after a `limit`
+    it does not take. It states which arguments shrink the result, and claims
+    nothing about what a smaller result is worth answering with.
     """
     state = get_state()
 
@@ -1143,12 +1145,7 @@ async def execute_tql(
             rows,
             format,
             elapsed_ms,
-            # Levers that drop volume without resampling. Widening `step`
-            # would shrink it faster but changes the values themselves, and
-            # a caller that took that advice could read a smoothed-away
-            # spike as an absent one.
-            "Shorten the time range, or select fewer series with label "
-            "matchers or aggregation.",
+            "Shorten the time range, widen `step`, or match fewer series.",
             meta={"tql": tql},
         )
 
@@ -1243,8 +1240,7 @@ async def query_range(
             rows,
             format,
             elapsed_ms,
-            "Narrow `where` or lower `limit`. Widening `align` also fits more "
-            "in, but coarsens every window rather than returning less.",
+            "Widen `align`, narrow `where`, or lower `limit`.",
             meta={"query": query},
         )
 

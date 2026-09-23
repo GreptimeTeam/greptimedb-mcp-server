@@ -199,6 +199,40 @@ def _stub_query_rows(monkeypatch, matcher, rows):
 
 
 @pytest.mark.asyncio
+async def test_truncation_advice_names_only_real_arguments(monkeypatch):
+    """Advice must be actionable on the tool that gave it.
+
+    One message was shared by all three query tools and told every caller to
+    lower `limit`, which execute_tql does not take. A backticked name that is
+    not an argument sends the reader looking for one that is not there.
+    """
+    import inspect
+    import re
+
+    server._state.max_result_bytes = 1200
+    rows = [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)]
+    _stub_query_rows(monkeypatch, lambda q: True, rows)
+
+    calls = {
+        execute_sql: execute_sql(query="SELECT * FROM users", format="json"),
+        execute_tql: execute_tql(
+            query="rate(m[5m])",
+            start="2024-01-01T00:00:00Z",
+            end="2024-01-01T01:00:00Z",
+            step="1m",
+        ),
+        query_range: query_range(
+            table="metrics", select="ts, host, avg(cpu) RANGE '5m'", align="1m"
+        ),
+    }
+    for fn, coro in calls.items():
+        reason = json.loads(await coro)["truncation_reason"]
+        named = set(re.findall(r"`(\w+)`", reason))
+        assert named, f"{fn.__name__} gave no actionable argument"
+        assert named <= set(inspect.signature(fn).parameters), fn.__name__
+
+
+@pytest.mark.asyncio
 async def test_show_tables_respects_limit():
     """The single-column listing is bounded by limit like any other read."""
     result = await execute_sql(query="SHOW TABLES", limit=1)
@@ -626,11 +660,6 @@ async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
     assert data["truncated"] is True
     assert "result budget" in data["truncation_reason"]
     assert len(result.encode("utf-8")) <= 1200
-    # execute_tql has no `limit`, and resampling advice would change the
-    # values rather than return fewer of them.
-    assert "`limit`" not in data["truncation_reason"]
-    assert "`step`" not in data["truncation_reason"]
-    assert "time range" in data["truncation_reason"]
 
 
 @pytest.mark.asyncio
