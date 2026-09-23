@@ -382,7 +382,14 @@ def tool(**tool_kwargs):
     The SDK reports any exception that is not a `ToolError` with a generic
     message, so validation failures are re-raised as `ToolError` to keep the
     reason visible to the client.
+
+    Structured output is off. Every tool here returns a string, so the SDK
+    would derive a `{"result": <string>}` schema and send the same bytes twice,
+    once as text content and once as structuredContent -- doubling the
+    response for a wrapper that carries nothing the text does not, and putting
+    the byte budget at half of what actually goes over the wire.
     """
+    tool_kwargs.setdefault("structured_output", False)
 
     def decorator(fn):
         # The audited subject is the name the client called, which is the
@@ -419,10 +426,6 @@ def tool(**tool_kwargs):
 # Query type constants
 _READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
 
-# Rounds allowed to fit rows into the byte budget. The estimate converges in
-# one or two; the cap stops a single oversized row from spinning.
-_FIT_ATTEMPTS = 5
-
 
 def _require_write(operation: str) -> None:
     """Refuse a state-changing operation unless write mode is on.
@@ -440,24 +443,38 @@ def _require_write(operation: str) -> None:
 
 
 def _fit(budget: int, render, count: int) -> str:
-    """Drop rows from the tail until `render(kept)` fits the byte budget.
+    """Return the longest prefix of rows whose rendering fits the byte budget.
 
     `render` takes a row count and returns the whole result, envelope
     included, so the budget covers what is actually sent rather than the rows
-    alone. Shedding rows keeps the result well-formed, which a blind cut
-    cannot; the cut in `truncate_to_budget` remains as a backstop for results
-    that still do not fit.
+    alone. Shedding rows keeps the result well-formed, which the blind cut in
+    `truncate_to_budget` cannot.
+
+    Bisects rather than scaling from the rendered size: one outsized row makes
+    a proportional estimate wrong in a way that does not settle within any
+    fixed number of rounds, and a rendering that never comes under budget gets
+    cut blind, losing the structure shedding exists to keep. Below `count`
+    every rendering carries the truncation notice, so size is monotonic in the
+    row count there and the search is well defined.
     """
-    kept = count
-    text = ""
-    for _ in range(_FIT_ATTEMPTS):
-        text = render(kept)
-        size = len(text.encode("utf-8"))
-        if size <= budget or kept == 0:
-            return text
-        # Scale by how far over we are, but always make progress.
-        kept = min(kept - 1, kept * budget // size)
-    return text
+    whole = render(count)
+    if _byte_len(whole) <= budget or count == 0:
+        return whole
+
+    lo, hi, best = 0, count - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        text = render(mid)
+        if _byte_len(text) <= budget:
+            best, lo = text, mid + 1
+        else:
+            hi = mid - 1
+    # Even an empty result can exceed a very small budget; the backstop cuts it.
+    return best if best is not None else render(0)
+
+
+def _byte_len(text: str) -> int:
+    return len(text.encode("utf-8"))
 
 
 def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:

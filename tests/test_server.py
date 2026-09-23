@@ -152,6 +152,37 @@ def test_non_json_result_says_when_rows_were_dropped(fmt):
     assert len(result.encode("utf-8")) <= 600
 
 
+def test_one_outsized_row_still_yields_parseable_json():
+    """Shedding has to converge, or the backstop cuts valid JSON into junk.
+
+    A proportional estimate never settles when one row dwarfs the rest, so
+    this shape used to exhaust the rounds and get cut blind.
+    """
+    server._state.max_result_bytes = 65536
+    rows = [(0, "x" * 60000)] + [(i, "y" * 10) for i in range(1, 1000)]
+
+    result = _process_query_result(
+        {"type": "query", "columns": ["id", "val"], "rows": rows, "has_more": False},
+        "json",
+        1.0,
+    )
+
+    meta = json.loads(result)
+    assert len(result.encode("utf-8")) <= 65536
+    assert 0 < meta["row_count"] < len(rows)
+    assert meta["truncated"] is True
+
+
+def test_tools_do_not_duplicate_the_payload_as_structured_output():
+    """Every tool returns a string, so structuredContent would be a copy.
+
+    With it on, the SDK sends the same bytes twice and the byte budget covers
+    half of what actually goes over the wire.
+    """
+    for name in ("execute_sql", "describe_table", "health_check"):
+        assert server.mcp._tool_manager.get_tool(name).output_schema is None, name
+
+
 @pytest.mark.asyncio
 async def test_show_tables_respects_limit():
     """The single-column listing is bounded by limit like any other read."""
