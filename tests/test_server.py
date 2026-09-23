@@ -1400,3 +1400,18 @@ async def test_range_reports_limit_truncation(monkeypatch, fmt, count):
         assert data["query"].endswith("LIMIT 3")
     else:
         assert ("truncated" in result) is (count > 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["SHOW TABLES", "SHOW DATABASES"])
+@pytest.mark.parametrize("limit", [1, 2, 3])
+async def test_listing_truncation_advice_respects_limit_cap(monkeypatch, query, limit):
+    monkeypatch.setattr(server, "MAX_QUERY_LIMIT", 2)
+    _stub_query_rows(monkeypatch, lambda q: q == query, [("a",), ("b",), ("c",)])
+    result = await execute_sql(query=query, limit=limit)
+    assert "truncated" in result
+    if limit == 1:
+        assert "raise `limit` up to 2" in result
+    else:
+        assert "raise `limit`" not in result
+        assert "information_schema" in result

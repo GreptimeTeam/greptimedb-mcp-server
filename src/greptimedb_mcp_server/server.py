@@ -542,7 +542,7 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
         result["rows"],
         format,
         elapsed_ms,
-        "Select fewer columns, narrow the query, or lower `limit`.",
+        "Narrow `query` or lower `limit` for a subset, not the complete result.",
         has_more=result["has_more"],
     )
 
@@ -572,7 +572,12 @@ def _single_column_listing(cursor, limit: int, default_header: str) -> dict:
 
     text = "\n".join([header, *(str(row[0]) for row in rows)])
     if has_more:
-        text += f"\n[truncated at {limit} rows; raise `limit` to see more]"
+        advice = (
+            f"raise `limit` up to {MAX_QUERY_LIMIT} to see more"
+            if limit < MAX_QUERY_LIMIT
+            else "row limit reached; filter names with LIKE or query information_schema"
+        )
+        text += f"\n[truncated at {limit} rows; {advice}]"
     return {"type": "simple", "text": text}
 
 
@@ -640,7 +645,9 @@ async def execute_sql(
     Results are bounded by a byte budget and a row limit clamped to 1-10000.
     JSON row results report `truncated`; `truncation_reason` describes rows
     dropped for the byte budget. CSV and Markdown report truncation in a text
-    notice. SHOW TABLES and SHOW DATABASES return plain text regardless of format.
+    notice. Lowering `limit` or narrowing filters does not make the original
+    result complete. SHOW TABLES and SHOW DATABASES return plain text regardless
+    of format.
     """
     state = get_state()
     limit = _validate_sql_params(query, format, limit)
@@ -961,14 +968,18 @@ async def query_semantic_graph(
         Field(
             description=(
                 "relationships only: how the edge was obtained -- trace "
-                "(paired spans), attribute (identities on one row), declared, "
+                "(span-derived), attribute (identities on one row), declared, "
                 "or agent."
             )
         ),
     ] = None,
     limit: Annotated[
         int,
-        Field(description="Maximum rows to return.", ge=1, le=graph.MAX_LIMIT),
+        Field(
+            description="Maximum rows for entities or relationships; ignored for summary.",
+            ge=1,
+            le=graph.MAX_LIMIT,
+        ),
     ] = graph.DEFAULT_LIMIT,
 ) -> str:
     """Query the semantic graph: which entities exist and which are related.
@@ -979,28 +990,30 @@ async def query_semantic_graph(
     entities or relationships directly.
 
     The window is required and half-open, [start_time, end_time), over
-    observed_at -- the 60-second bucket an observation was recorded in. Rows
-    are aggregated across the buckets in the window, and the result echoes the
-    window and the limit it used.
+    observed_at. Derived observations use 60-second buckets. Declared edges
+    instead reflect validity overlapping the window: observed_at is the later
+    of the validity start and the window start, not a measured event time.
 
-    relationships returns one row per edge per confidence. The database reports
-    confidence 1.0 for a bucket whose client and server spans paired and 0.5
-    for one where only the client was seen, and it switches request_count,
-    error_count and the durations to whichever population that bucket
-    describes: paired requests timed by the server span, or unmatched clients
+    relationships groups by endpoints, relationship type, provenance, and
+    confidence. For trace-derived calls, the database reports confidence 1.0
+    for a bucket whose client and server spans paired and 0.5 for one where
+    only the client was seen, and it switches request_count, error_count and
+    the durations to whichever population that bucket describes: paired
+    requests timed by the server span, or unmatched clients
     timed by their own. An edge observed both ways therefore comes back as two
     rows. unmatched_count reports client spans with no paired server span.
-    Durations are in seconds.
+    Durations are in seconds. Attribute-derived edges describe identities
+    observed together, not measured calls. Declared edges retain their supplied
+    confidence and counts; these are assertions, not span-pairing evidence.
 
     entities returns one row per distinct set of attributes, so an entity whose
     descriptive attributes changed inside the window appears more than once;
     item_count counts rows, not entities. first_seen and last_seen bound where
     the row was observed inside this window, not when the entity first existed.
 
-    Ordering is by type and endpoint. Only `calls` edges carry request, error
-    and duration counts, so pass rel_type=calls to order by error and request
-    count instead. When complete is false, more rows matched than the limit and
-    later types may be absent entirely rather than merely cut short.
+    Ordering is by type and endpoint. Pass rel_type=calls to order by error
+    and request count instead. When complete is false, more rows matched than
+    the limit and later types may be absent entirely rather than merely cut short.
 
     A missing edge is not evidence that two entities are unrelated: it can also
     mean the call was not instrumented, was sampled out, or fell outside this
@@ -1153,15 +1166,17 @@ async def execute_tql(
     """Execute TQL query for time-series analysis. TQL is PromQL-compatible.
 
     Use it for metric tables, where the table name is the metric name and the
-    value columns are the PromQL fields. It does not reach logs, traces or
-    events and cannot join tables; use execute_sql for those.
+    value columns are the PromQL fields. PromQL vector matching can combine
+    metrics from different tables. Use execute_sql for log or event rows,
+    trace analysis, and SQL JOINs.
 
     `metric{__schema__="other_db"}` reads a database other than the connected
     one. That matcher accepts `=` only.
 
     Returns at most 10000 rows, also bounded by a byte budget. JSON reports
-    `truncated`; CSV and Markdown append a truncation notice. Narrow the time
-    range or match fewer series when the result is incomplete.
+    `truncated`; CSV and Markdown append a truncation notice. A shorter time
+    range or fewer series changes coverage; a larger step lowers resolution.
+    An untruncated retry with those changes does not cover the original query.
     """
     state = get_state()
 
@@ -1210,7 +1225,8 @@ async def execute_tql(
             rows,
             format,
             elapsed_ms,
-            "Shorten the time range, widen `step`, or match fewer series.",
+            "A larger `step` lowers resolution; a shorter time range or fewer "
+            "series reduces coverage. Neither recovers the complete original result.",
             meta={"tql": tql},
             has_more=has_more,
         )
@@ -1263,6 +1279,10 @@ async def query_range(
     `avg(cpu) RANGE '5m'`, and `align` supplies the step between windows. A
     plain column list does not plan. `table` accepts `schema.table` to read a
     database other than the connected one.
+
+    A larger align lowers resolution; tighter filters or a lower limit return
+    a subset. An untruncated retry with those changes does not cover the
+    original query.
     """
     state = get_state()
 
@@ -1324,7 +1344,8 @@ async def query_range(
             rows,
             format,
             elapsed_ms,
-            "Widen `align`, narrow `where`, or lower `limit`.",
+            "A larger `align` lowers resolution; tighter `where` or lower `limit` "
+            "returns a subset, not the complete original result.",
             meta={"query": query},
             has_more=has_more,
         )
@@ -1336,7 +1357,13 @@ async def query_range(
 
 @tool()
 async def explain_query(
-    query: Annotated[str, Field(description="SQL or TQL query to analyze")],
+    query: Annotated[
+        str,
+        Field(
+            description="Original SQL query or full TQL EVAL (...) <PromQL> statement. "
+            "Do not include EXPLAIN or ANALYZE wrappers."
+        ),
+    ],
     analyze: Annotated[
         bool, Field(description="Execute and show actual metrics")
     ] = False,
