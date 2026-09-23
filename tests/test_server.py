@@ -607,7 +607,7 @@ async def test_execute_tql():
 @pytest.mark.asyncio
 async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
     """Oversized TQL JSON should drop rows before the backstop slices bytes."""
-    server._state.max_result_bytes = 500
+    server._state.max_result_bytes = 1200
     _stub_query_rows(
         monkeypatch,
         lambda query: "TQL" in query.upper(),
@@ -622,10 +622,10 @@ async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
     )
 
     data = json.loads(result)
-    assert data["row_count"] < 10
+    assert 0 < data["row_count"] < 10
     assert data["truncated"] is True
     assert "result budget" in data["truncation_reason"]
-    assert len(result.encode("utf-8")) <= 500
+    assert len(result.encode("utf-8")) <= 1200
 
 
 @pytest.mark.asyncio
@@ -711,7 +711,7 @@ async def test_query_range():
 @pytest.mark.asyncio
 async def test_query_range_sheds_rows_to_keep_json_parseable(monkeypatch):
     """Oversized RANGE JSON should stay valid instead of being cut mid-object."""
-    server._state.max_result_bytes = 500
+    server._state.max_result_bytes = 1200
     _stub_query_rows(
         monkeypatch,
         lambda query: "ALIGN" in query.upper(),
@@ -726,10 +726,10 @@ async def test_query_range_sheds_rows_to_keep_json_parseable(monkeypatch):
     )
 
     data = json.loads(result)
-    assert data["row_count"] < 10
+    assert 0 < data["row_count"] < 10
     assert data["truncated"] is True
     assert "result budget" in data["truncation_reason"]
-    assert len(result.encode("utf-8")) <= 500
+    assert len(result.encode("utf-8")) <= 1200
 
 
 @pytest.mark.asyncio

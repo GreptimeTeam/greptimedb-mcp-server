@@ -474,9 +474,12 @@ def _process_bounded_rows(
     meta: dict[str, object] | None = None,
     has_more: bool = False,
 ) -> str:
-    """Render row results inside the byte budget without breaking JSON."""
+    """Render row results inside the byte budget without breaking JSON.
+
+    `meta` is the envelope fields that precede the data, such as the statement
+    a tool built.
+    """
     state = get_state()
-    base_meta = dict(meta or {})
 
     def render(kept: int) -> str:
         formatted = format_results(
@@ -486,6 +489,9 @@ def _process_bounded_rows(
             mask_enabled=state.mask_enabled,
             mask_patterns=state.mask_patterns,
         )
+        # Every format reports the shed, inside what gets measured: a quietly
+        # short result reads as the whole answer. Naming the budget separates
+        # it from having hit `limit`, which calls for a different fix.
         dropped = len(rows) - kept
         if format != "json":
             if dropped:
@@ -497,7 +503,7 @@ def _process_bounded_rows(
             return formatted
 
         result = {
-            **base_meta,
+            **(meta or {}),
             "data": json.loads(formatted),
             "row_count": kept,
             "truncated": has_more or bool(dropped),
