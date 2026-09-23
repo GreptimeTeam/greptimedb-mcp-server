@@ -7,6 +7,30 @@ import json
 
 VALID_FORMATS = {"csv", "json", "markdown"}
 
+TRUNCATION_NOTICE = (
+    "\n\n[truncated: the result was {actual} bytes, over the {budget}-byte "
+    "budget, and was cut here. It is no longer valid {fmt}. Narrow the query, "
+    "lower `limit`, or select fewer columns.]"
+)
+
+
+def truncate_to_budget(text: str, budget: int, fmt: str = "output") -> str:
+    """Cut a rendered result down to a byte budget, saying so in the result.
+
+    A result over the client's limit is rejected whole, so a cut result with a
+    notice beats a call that returns nothing. Cutting mid-structure leaves
+    invalid JSON or a torn CSV row, which is why the notice names the format:
+    a caller that cannot parse the remainder still reads why and what to do.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= budget:
+        return text
+
+    notice = TRUNCATION_NOTICE.format(actual=len(encoded), budget=budget, fmt=fmt)
+    keep = max(0, budget - len(notice.encode("utf-8")))
+    # errors="ignore" drops a multi-byte character the cut landed inside.
+    return encoded[:keep].decode("utf-8", errors="ignore") + notice
+
 
 def _convert_value(val):
     """Convert datetime values to string."""

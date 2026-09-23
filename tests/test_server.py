@@ -20,6 +20,7 @@ from greptimedb_mcp_server.server import (
     create_pipeline,
     dryrun_pipeline,
     delete_pipeline,
+    _process_query_result,
     _validate_pipeline_name,
     _validate_dashboard_name,
     list_dashboards,
@@ -85,6 +86,80 @@ def setup_state():
     yield
 
     server._state = None
+
+
+@pytest.fixture
+def write_mode():
+    """Enable write mode, which the four state-changing tools now require."""
+    server._state.allow_write = True
+    yield
+    server._state.allow_write = False
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: create_pipeline(name="p", pipeline="version: 2"),
+        lambda: delete_pipeline(name="p", version="2024-01-01"),
+        lambda: create_dashboard(name="d", definition='{"kind": "Dashboard"}'),
+        lambda: delete_dashboard(name="d"),
+    ],
+    ids=["create_pipeline", "delete_pipeline", "create_dashboard", "delete_dashboard"],
+)
+@pytest.mark.asyncio
+async def test_state_changing_tools_refused_in_read_only(call):
+    """Read-only mode refuses every tool that changes stored state.
+
+    The state fixture leaves http_session as None, so a tool that slipped past
+    the gate would fail on the session rather than pass quietly.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await call()
+    assert "read-only mode" in str(excinfo.value)
+    assert "--allow-write" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_sheds_rows_to_fit_byte_budget():
+    """An oversized result loses rows but stays parseable and says why."""
+    server._state.max_result_bytes = 250
+    result = await execute_sql(query="SELECT * FROM users", format="json")
+
+    meta = json.loads(result)
+    assert meta["row_count"] < 2
+    assert meta["truncated"] is True
+    assert "result budget" in meta["truncation_reason"]
+
+
+@pytest.mark.parametrize("fmt", ["csv", "markdown"])
+def test_non_json_result_says_when_rows_were_dropped(fmt):
+    """A shed must be visible in every format, not only in the JSON envelope.
+
+    csv is execute_sql's default, and a quietly short csv reads as the whole
+    answer rather than part of one.
+    """
+    server._state.max_result_bytes = 600
+    rows = [(i, "x" * 60) for i in range(50)]
+
+    result = _process_query_result(
+        {"type": "query", "columns": ["id", "val"], "rows": rows, "has_more": False},
+        fmt,
+        1.0,
+    )
+
+    assert "truncated" in result
+    assert "result budget" in result
+    assert len(result.encode("utf-8")) <= 600
+
+
+@pytest.mark.asyncio
+async def test_show_tables_respects_limit():
+    """The single-column listing is bounded by limit like any other read."""
+    result = await execute_sql(query="SHOW TABLES", limit=1)
+
+    assert "users" in result
+    assert "orders" not in result
+    assert "truncated at 1 rows" in result
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1083,7 @@ async def test_list_pipelines_with_name():
 
 
 @pytest.mark.asyncio
-async def test_create_pipeline_invalid_name():
+async def test_create_pipeline_invalid_name(write_mode):
     """Test create_pipeline with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await create_pipeline(name="123-invalid", pipeline="version: 2")
@@ -1047,7 +1122,7 @@ async def test_dryrun_pipeline_neither_pipeline_nor_name():
 
 
 @pytest.mark.asyncio
-async def test_delete_pipeline_invalid_name():
+async def test_delete_pipeline_invalid_name(write_mode):
     """Test delete_pipeline with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await delete_pipeline(name="123-invalid", version="2024-01-01")
@@ -1055,7 +1130,7 @@ async def test_delete_pipeline_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_delete_pipeline_missing_version():
+async def test_delete_pipeline_missing_version(write_mode):
     """Test delete_pipeline with missing version"""
     result = await delete_pipeline(name="test_pipeline", version="")
     assert "Error: version is required" in result
@@ -1094,7 +1169,7 @@ def test_validate_dashboard_name_invalid():
 
 
 @pytest.mark.asyncio
-async def test_create_dashboard_invalid_name():
+async def test_create_dashboard_invalid_name(write_mode):
     """Test create_dashboard with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await create_dashboard(name="123.invalid", definition='{"kind": "Dashboard"}')
@@ -1102,14 +1177,14 @@ async def test_create_dashboard_invalid_name():
 
 
 @pytest.mark.asyncio
-async def test_create_dashboard_invalid_json():
+async def test_create_dashboard_invalid_json(write_mode):
     """Test create_dashboard with invalid JSON"""
     result = await create_dashboard(name="test_dashboard", definition="not valid json")
     assert "Error: Invalid JSON definition" in result
 
 
 @pytest.mark.asyncio
-async def test_delete_dashboard_invalid_name():
+async def test_delete_dashboard_invalid_name(write_mode):
     """Test delete_dashboard with invalid name"""
     with pytest.raises(ToolError) as excinfo:
         await delete_dashboard(name="123.invalid")

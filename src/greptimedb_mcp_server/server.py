@@ -9,8 +9,12 @@ if sys.platform == "win32" and any(t in sys.argv for t in ("sse", "streamable-ht
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from greptimedb_mcp_server import graph, semantics
-from greptimedb_mcp_server.config import Config
-from greptimedb_mcp_server.formatter import format_results, VALID_FORMATS
+from greptimedb_mcp_server.config import Config, DEFAULT_MAX_RESULT_BYTES
+from greptimedb_mcp_server.formatter import (
+    format_results,
+    truncate_to_budget,
+    VALID_FORMATS,
+)
 from greptimedb_mcp_server.utils import (
     security_gate,
     templates_loader,
@@ -66,6 +70,7 @@ class AppState:
     mask_enabled: bool = True
     mask_patterns: list[str] = field(default_factory=list)
     allow_write: bool = False
+    max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
     pool: MySQLConnectionPool | None = field(default=None)
     http_session: aiohttp.ClientSession | None = field(default=None)
     table_semantics: semantics.SemanticsView = field(
@@ -277,7 +282,8 @@ def _fetch_table_samples(
 
 def _build_table_guidance(schema: dict, profile: dict, samples: dict) -> list[str]:
     """Combine semantic query hints with hints about the profile itself."""
-    guidance = semantics.guidance(profile)
+    columns = [column["name"] for column in schema.get("columns", [])]
+    guidance = semantics.guidance(profile, columns)
     if samples.get("included") and samples.get("strategy") == "latest_by_time_index":
         guidance.append(
             f"Sample rows are ordered by time index {schema.get('time_index')} descending."
@@ -323,6 +329,7 @@ async def lifespan(mcp: MCPServer):
         mask_enabled=config.mask_enabled,
         mask_patterns=mask_patterns,
         allow_write=config.allow_write,
+        max_result_bytes=config.max_result_bytes,
         http_session=aiohttp.ClientSession(),
         semantic_graph=graph.GraphView(
             mask=graph.mask_patterns(config.mask_enabled, mask_patterns)
@@ -394,7 +401,14 @@ def tool(**tool_kwargs):
                 _audit(name, arguments, start_time, e)
                 raise
             _audit(name, arguments, start_time)
-            return result
+            # Last line of defence for every tool. Paths that can shed rows
+            # cut themselves first, so what reaches here is either already
+            # within budget or has no row structure to shed.
+            return truncate_to_budget(
+                result,
+                get_state().max_result_bytes,
+                arguments.get("format") or "output",
+            )
 
         mcp.tool(**tool_kwargs)(wrapper)
         return wrapper
@@ -404,6 +418,46 @@ def tool(**tool_kwargs):
 
 # Query type constants
 _READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
+
+# Rounds allowed to fit rows into the byte budget. The estimate converges in
+# one or two; the cap stops a single oversized row from spinning.
+_FIT_ATTEMPTS = 5
+
+
+def _require_write(operation: str) -> None:
+    """Refuse a state-changing operation unless write mode is on.
+
+    `execute_sql` gates DDL/DML behind the same flag. Without this, a server
+    started read-only would still let a caller create and delete pipelines and
+    dashboards over HTTP.
+    """
+    if not get_state().allow_write:
+        raise ValueError(
+            f"{operation} changes stored server state and is refused in "
+            "read-only mode. Restart the server with --allow-write (or "
+            "GREPTIMEDB_ALLOW_WRITE=true) to allow it."
+        )
+
+
+def _fit(budget: int, render, count: int) -> str:
+    """Drop rows from the tail until `render(kept)` fits the byte budget.
+
+    `render` takes a row count and returns the whole result, envelope
+    included, so the budget covers what is actually sent rather than the rows
+    alone. Shedding rows keeps the result well-formed, which a blind cut
+    cannot; the cut in `truncate_to_budget` remains as a backstop for results
+    that still do not fit.
+    """
+    kept = count
+    text = ""
+    for _ in range(_FIT_ATTEMPTS):
+        text = render(kept)
+        size = len(text.encode("utf-8"))
+        if size <= budget or kept == 0:
+            return text
+        # Scale by how far over we are, but always make progress.
+        kept = min(kept - 1, kept * budget // size)
+    return text
 
 
 def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
@@ -419,24 +473,44 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
 
     # Handle query results
     state = get_state()
-    formatted = format_results(
-        result["columns"],
-        result["rows"],
-        format,
-        mask_enabled=state.mask_enabled,
-        mask_patterns=state.mask_patterns,
-    )
+    columns, rows = result["columns"], result["rows"]
 
-    if format == "json":
+    def render(kept: int) -> str:
+        formatted = format_results(
+            columns,
+            rows[:kept],
+            format,
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
+        # Every format has to carry the shed, and carry it inside what gets
+        # measured: a result that is quietly short is read as the whole
+        # answer. Naming the budget separates this from having hit `limit`,
+        # which calls for a different fix.
+        dropped = len(rows) - kept
+        if format != "json":
+            if dropped:
+                formatted += (
+                    f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
+                    f"fit the {state.max_result_bytes}-byte result budget. "
+                    "Select fewer columns, narrow the query, or lower `limit`.]"
+                )
+            return formatted
         meta = {
             "data": json.loads(formatted),
-            "row_count": len(result["rows"]),
-            "truncated": result["has_more"],
+            "row_count": kept,
+            "truncated": result["has_more"] or bool(dropped),
             "execution_time_ms": round(elapsed_ms, 2),
         }
+        if dropped:
+            meta["truncation_reason"] = (
+                f"Dropped {dropped} of {len(rows)} rows read, to fit the "
+                f"{state.max_result_bytes}-byte result budget. Select fewer "
+                "columns, narrow the query, or lower `limit`."
+            )
         return json.dumps(meta, indent=2, ensure_ascii=False)
 
-    return formatted
+    return _fit(state.max_result_bytes, render, len(rows))
 
 
 def _validate_sql_params(query: str, format: str, limit: int) -> int:
@@ -448,6 +522,26 @@ def _validate_sql_params(query: str, format: str, limit: int) -> int:
     return min(max(1, limit), MAX_QUERY_LIMIT)
 
 
+def _single_column_listing(cursor, limit: int, default_header: str) -> dict:
+    """Read a one-column listing, bounded by the same limit as any other read.
+
+    SHOW TABLES on a large instance returns every name; read whole, this was
+    the one path that ignored `limit`.
+    """
+    header = cursor.description[0][0] if cursor.description else default_header
+    rows = cursor.fetchmany(limit)
+    has_more = cursor.fetchone() is not None
+    if has_more:
+        # MySQL connector requires all results consumed before connection reuse
+        while cursor.fetchone():
+            pass
+
+    text = "\n".join([header, *(str(row[0]) for row in rows)])
+    if has_more:
+        text += f"\n[truncated at {limit} rows; raise `limit` to see more]"
+    return {"type": "simple", "text": text}
+
+
 def _execute_query(state: AppState, query: str, limit: int) -> dict:
     """Execute query synchronously and return result dict."""
     with state.get_connection() as conn:
@@ -456,20 +550,10 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
             stmt = query.strip().upper()
 
             if stmt.startswith("SHOW DATABASES"):
-                rows = cursor.fetchall()
-                header = cursor.description[0][0] if cursor.description else "Database"
-                return {
-                    "type": "simple",
-                    "text": header + "\n" + "\n".join(r[0] for r in rows),
-                }
+                return _single_column_listing(cursor, limit, "Database")
 
             if stmt.startswith("SHOW TABLES"):
-                rows = cursor.fetchall()
-                header = cursor.description[0][0] if cursor.description else "Tables"
-                return {
-                    "type": "simple",
-                    "text": header + "\n" + "\n".join(r[0] for r in rows),
-                }
+                return _single_column_listing(cursor, limit, "Tables")
 
             if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
                 if cursor.description is None:
@@ -502,9 +586,21 @@ async def execute_sql(
 ) -> str:
     """Execute SQL query against GreptimeDB. Please use MySQL dialect.
 
+    The general query entry point: use it for logs, traces, events, joins
+    across tables, and metadata queries such as SHOW TABLES. For a plain
+    metric time series prefer execute_tql, where the table name is the metric
+    name and PromQL states rate, increase and quantile directly.
+
+    Qualify a table as `schema.table` to read a database other than the one
+    this server connected to; the account needs read permission on it.
+
     Read-only by default. When the server runs with write mode enabled
     (--allow-write / GREPTIMEDB_ALLOW_WRITE), destructive SQL (DDL/DML) is
     also permitted.
+
+    Results are bounded by a byte budget as well as by `limit`. When rows are
+    dropped to fit it, `truncated` is true and `truncation_reason` says so;
+    that is a different cause from `limit` being reached.
     """
     state = get_state()
     limit = _validate_sql_params(query, format, limit)
@@ -644,6 +740,10 @@ async def search_table_semantics(
         f"{', '.join(semantics.VALID_SIGNAL_TYPES)}. Tables whose signal type "
         "was never stamped are excluded by this filter.",
     ] = None,
+    schema: Annotated[
+        str | None,
+        "Database to search. Defaults to the one this server is connected to.",
+    ] = None,
     limit: Annotated[
         int, f"Maximum tables to return (1-{semantics.MAX_SEARCH_LIMIT}, default: 50)"
     ] = semantics.MAX_SEARCH_LIMIT,
@@ -661,8 +761,8 @@ async def search_table_semantics(
     it returns candidates, query their data or describe one of them; do not
     describe every candidate in turn.
 
-    It covers only the database this server is connected to, unlike
-    describe_table, which accepts a schema-qualified name.
+    It searches one database at a time: the connected one by default, or the
+    one named by `schema`. Use SHOW DATABASES to see what else is there.
 
     Only tables carrying a `greptime.semantic.*` option, or one a built-in
     convention derives a declaration for, are visible here. A table absent from
@@ -671,13 +771,12 @@ async def search_table_semantics(
     """
     state = get_state()
     request = semantics.SearchRequest.parse(query, signal_type, limit)
+    table_schema = schema or state.db_config["database"]
 
     def _sync_search():
         with state.get_connection() as conn:
             with conn.cursor() as cursor:
-                return state.table_semantics.search(
-                    cursor, state.db_config["database"], request
-                )
+                return state.table_semantics.search(cursor, table_schema, request)
 
     try:
         result = await asyncio.to_thread(_sync_search)
@@ -955,12 +1054,24 @@ async def execute_tql(
         "End time: SQL expression (e.g., 'now()'), RFC3339, or Unix timestamp",
     ],
     step: Annotated[str, "Query resolution step, e.g., '1m', '5m', '1h'"],
-    lookback: Annotated[str | None, "Lookback delta for range queries"] = None,
+    lookback: Annotated[
+        str | None,
+        "Lookback delta: how far back a sample may be reused when a step "
+        "lands where there is no sample, e.g. '5m'. Defaults to 5m.",
+    ] = None,
     format: Annotated[
         str, "Output format: csv, json, or markdown (default: json)"
     ] = "json",
 ) -> str:
-    """Execute TQL query for time-series analysis. TQL is PromQL-compatible - use standard PromQL syntax."""
+    """Execute TQL query for time-series analysis. TQL is PromQL-compatible.
+
+    Use it for metric tables, where the table name is the metric name and the
+    value columns are the PromQL fields. It does not reach logs, traces or
+    events and cannot join tables; use execute_sql for those.
+
+    `metric{__schema__="other_db"}` reads a database other than the connected
+    one. That matcher accepts `=` only.
+    """
     state = get_state()
 
     if not all([query, start, end, step]):
@@ -1038,7 +1149,18 @@ async def query_range(
     ] = "json",
     limit: Annotated[int, "Maximum rows to return"] = 1000,
 ) -> str:
-    """Execute time-window aggregation query using GreptimeDB's RANGE query syntax."""
+    """Execute time-window aggregation query using GreptimeDB's RANGE query syntax.
+
+    The narrowest of the three query entry points. Use it for a window
+    aggregation over a non-metric table, or an alignment PromQL cannot state;
+    a metric time series is better served by execute_tql and anything else by
+    execute_sql.
+
+    `select` must carry at least one aggregate with its own RANGE, such as
+    `avg(cpu) RANGE '5m'`, and `align` supplies the step between windows. A
+    plain column list does not plan. `table` accepts `schema.table` to read a
+    database other than the connected one.
+    """
     state = get_state()
 
     if not all([table, select, align]):
@@ -1293,7 +1415,12 @@ async def create_pipeline(
     name: Annotated[str, "Name of the pipeline to create"],
     pipeline: Annotated[str, "Pipeline configuration in YAML format"],
 ) -> str:
-    """Create a new pipeline in GreptimeDB."""
+    """Create a new pipeline in GreptimeDB.
+
+    Stores a new version of the pipeline; it does not replace existing ones.
+    Refused unless the server runs with write mode enabled.
+    """
+    _require_write("create_pipeline")
     state = get_state()
     name = _validate_pipeline_name(name)
 
@@ -1419,7 +1546,11 @@ async def delete_pipeline(
     name: Annotated[str, "Name of the pipeline to delete"],
     version: Annotated[str, "Version of the pipeline to delete (timestamp)"],
 ) -> str:
-    """Delete a specific version of a pipeline from GreptimeDB."""
+    """Delete a specific version of a pipeline from GreptimeDB.
+
+    Irreversible, and refused unless the server runs with write mode enabled.
+    """
+    _require_write("delete_pipeline")
     state = get_state()
     name = _validate_pipeline_name(name)
 
@@ -1494,7 +1625,12 @@ async def create_dashboard(
     name: Annotated[str, "Name of the dashboard"],
     definition: Annotated[str, "Perses dashboard definition in JSON format"],
 ) -> str:
-    """Create or update a Perses dashboard definition in GreptimeDB."""
+    """Create or update a Perses dashboard definition in GreptimeDB.
+
+    Overwrites any dashboard already stored under this name. Refused unless
+    the server runs with write mode enabled.
+    """
+    _require_write("create_dashboard")
     state = get_state()
     name = _validate_dashboard_name(name)
 
@@ -1531,7 +1667,11 @@ async def create_dashboard(
 async def delete_dashboard(
     name: Annotated[str, "Name of the dashboard to delete"],
 ) -> str:
-    """Delete a Perses dashboard definition from GreptimeDB."""
+    """Delete a Perses dashboard definition from GreptimeDB.
+
+    Irreversible, and refused unless the server runs with write mode enabled.
+    """
+    _require_write("delete_dashboard")
     state = get_state()
     name = _validate_dashboard_name(name)
 

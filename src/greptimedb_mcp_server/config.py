@@ -2,6 +2,12 @@ import argparse
 from dataclasses import dataclass
 import os
 
+# Large enough for a useful page of rows, small enough to survive the result
+# limits MCP clients impose. Raise it with --max-result-bytes when the client
+# accepts more.
+DEFAULT_MAX_RESULT_BYTES = 64 * 1024
+MIN_RESULT_BYTES = 1024
+
 
 @dataclass
 class Config:
@@ -101,6 +107,14 @@ class Config:
     """
     Allowed origins for CORS (for sse/streamable-http).
     Only used when DNS rebinding protection is enabled.
+    """
+
+    max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
+    """
+    Byte budget for a single tool result. A result over the budget is
+    truncated with a notice rather than returned whole, because an oversized
+    result is rejected by the client and the whole call is wasted. Clients
+    differ in what they accept, so this is configurable.
     """
 
     @staticmethod
@@ -250,6 +264,16 @@ class Config:
             default=os.getenv("GREPTIMEDB_ALLOWED_ORIGINS", ""),
         )
 
+        parser.add_argument(
+            "--max-result-bytes",
+            type=int,
+            help=(
+                "Byte budget for a single tool result; larger results are "
+                f"truncated with a notice (default: {DEFAULT_MAX_RESULT_BYTES})"
+            ),
+            default=os.getenv("GREPTIMEDB_MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),
+        )
+
         args = parser.parse_args()
 
         return Config(
@@ -271,6 +295,7 @@ class Config:
             allow_write=args.allow_write,
             allowed_hosts=_parse_comma_separated(args.allowed_hosts),
             allowed_origins=_parse_comma_separated(args.allowed_origins),
+            max_result_bytes=max(MIN_RESULT_BYTES, args.max_result_bytes),
         )
 
 

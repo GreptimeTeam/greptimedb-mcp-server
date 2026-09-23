@@ -13,7 +13,7 @@ from greptimedb_mcp_server.utils import (
     _format_audit_params,
     audit_log,
 )
-from greptimedb_mcp_server.formatter import format_results
+from greptimedb_mcp_server.formatter import format_results, truncate_to_budget
 
 
 def test_templates_loader_basic():
@@ -621,3 +621,24 @@ def test_audit_log(caplog):
 def test_audit_log_never_raises():
     """Test audit_log never raises exceptions"""
     audit_log(None, None, None, None, None)  # Should not raise
+
+
+def test_truncate_to_budget_leaves_a_fitting_result_alone():
+    text = "small enough"
+    assert truncate_to_budget(text, 1024) == text
+
+
+def test_truncate_to_budget_holds_the_budget_and_says_it_cut():
+    result = truncate_to_budget("x" * 5000, 500, "json")
+
+    assert len(result.encode("utf-8")) <= 500
+    assert "truncated" in result
+    assert "json" in result
+
+
+def test_truncate_to_budget_does_not_split_a_character():
+    """A cut landing inside a multi-byte character must not corrupt it."""
+    result = truncate_to_budget("中" * 2000, 600)
+
+    assert len(result.encode("utf-8")) <= 600
+    result.encode("utf-8").decode("utf-8")  # raises if a character was split
