@@ -183,6 +183,21 @@ def test_tools_do_not_duplicate_the_payload_as_structured_output():
         assert server.mcp._tool_manager.get_tool(name).output_schema is None, name
 
 
+def _stub_query_rows(monkeypatch, matcher, rows):
+    """Override mocked query results for one family of statements."""
+    import conftest
+
+    original = conftest.MockCursor.execute
+
+    def stub(self, query, args=None):
+        original(self, query, args)
+        if matcher(query):
+            self._results = rows
+            self._fetch_index = 0
+
+    monkeypatch.setattr(conftest.MockCursor, "execute", stub)
+
+
 @pytest.mark.asyncio
 async def test_show_tables_respects_limit():
     """The single-column listing is bounded by limit like any other read."""
@@ -590,6 +605,30 @@ async def test_execute_tql():
 
 
 @pytest.mark.asyncio
+async def test_execute_tql_sheds_rows_to_keep_json_parseable(monkeypatch):
+    """Oversized TQL JSON should drop rows before the backstop slices bytes."""
+    server._state.max_result_bytes = 500
+    _stub_query_rows(
+        monkeypatch,
+        lambda query: "TQL" in query.upper(),
+        [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)],
+    )
+
+    result = await execute_tql(
+        query="rate(http_requests_total[5m])",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T01:00:00Z",
+        step="1m",
+    )
+
+    data = json.loads(result)
+    assert data["row_count"] < 10
+    assert data["truncated"] is True
+    assert "result budget" in data["truncation_reason"]
+    assert len(result.encode("utf-8")) <= 500
+
+
+@pytest.mark.asyncio
 async def test_execute_tql_with_lookback():
     """Test execute_tql with optional lookback parameter"""
     result = await execute_tql(
@@ -667,6 +706,30 @@ async def test_query_range():
     assert "query" in data
     assert "data" in data
     assert "ALIGN" in data["query"]
+
+
+@pytest.mark.asyncio
+async def test_query_range_sheds_rows_to_keep_json_parseable(monkeypatch):
+    """Oversized RANGE JSON should stay valid instead of being cut mid-object."""
+    server._state.max_result_bytes = 500
+    _stub_query_rows(
+        monkeypatch,
+        lambda query: "ALIGN" in query.upper(),
+        [("2024-01-01 00:00:00", "host1", "x" * 120) for _ in range(10)],
+    )
+
+    result = await query_range(
+        table="metrics",
+        select="ts, host, avg(cpu) RANGE '5m'",
+        align="1m",
+        by="host",
+    )
+
+    data = json.loads(result)
+    assert data["row_count"] < 10
+    assert data["truncated"] is True
+    assert "result budget" in data["truncation_reason"]
+    assert len(result.encode("utf-8")) <= 500
 
 
 @pytest.mark.asyncio

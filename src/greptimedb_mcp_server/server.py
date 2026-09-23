@@ -466,6 +466,54 @@ def _fit(budget: int, render, count: int) -> str:
     return best if best is not None else render(0)
 
 
+def _process_bounded_rows(
+    columns: list,
+    rows: list,
+    format: str,
+    elapsed_ms: float,
+    meta: dict[str, object] | None = None,
+    has_more: bool = False,
+) -> str:
+    """Render row results inside the byte budget without breaking JSON."""
+    state = get_state()
+    base_meta = dict(meta or {})
+
+    def render(kept: int) -> str:
+        formatted = format_results(
+            columns,
+            rows[:kept],
+            format,
+            mask_enabled=state.mask_enabled,
+            mask_patterns=state.mask_patterns,
+        )
+        dropped = len(rows) - kept
+        if format != "json":
+            if dropped:
+                formatted += (
+                    f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
+                    f"fit the {state.max_result_bytes}-byte result budget. "
+                    "Select fewer columns, narrow the query, or lower `limit`.]"
+                )
+            return formatted
+
+        result = {
+            **base_meta,
+            "data": json.loads(formatted),
+            "row_count": kept,
+            "truncated": has_more or bool(dropped),
+            "execution_time_ms": round(elapsed_ms, 2),
+        }
+        if dropped:
+            result["truncation_reason"] = (
+                f"Dropped {dropped} of {len(rows)} rows read, to fit the "
+                f"{state.max_result_bytes}-byte result budget. Select fewer "
+                "columns, narrow the query, or lower `limit`."
+            )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    return _fit(state.max_result_bytes, render, len(rows))
+
+
 def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
     """Process and format query execution result."""
     if result["type"] == "simple":
@@ -477,45 +525,13 @@ def _process_query_result(result: dict, format: str, elapsed_ms: float) -> str:
     if result["type"] == "modify":
         return f"Query executed successfully. Rows affected: {result['rowcount']}"
 
-    # Handle query results
-    state = get_state()
-    columns, rows = result["columns"], result["rows"]
-
-    def render(kept: int) -> str:
-        formatted = format_results(
-            columns,
-            rows[:kept],
-            format,
-            mask_enabled=state.mask_enabled,
-            mask_patterns=state.mask_patterns,
-        )
-        # Every format reports the shed, inside what gets measured: a quietly
-        # short result reads as the whole answer. Naming the budget separates
-        # it from having hit `limit`, which calls for a different fix.
-        dropped = len(rows) - kept
-        if format != "json":
-            if dropped:
-                formatted += (
-                    f"\n[truncated: dropped {dropped} of {len(rows)} rows to "
-                    f"fit the {state.max_result_bytes}-byte result budget. "
-                    "Select fewer columns, narrow the query, or lower `limit`.]"
-                )
-            return formatted
-        meta = {
-            "data": json.loads(formatted),
-            "row_count": kept,
-            "truncated": result["has_more"] or bool(dropped),
-            "execution_time_ms": round(elapsed_ms, 2),
-        }
-        if dropped:
-            meta["truncation_reason"] = (
-                f"Dropped {dropped} of {len(rows)} rows read, to fit the "
-                f"{state.max_result_bytes}-byte result budget. Select fewer "
-                "columns, narrow the query, or lower `limit`."
-            )
-        return json.dumps(meta, indent=2, ensure_ascii=False)
-
-    return _fit(state.max_result_bytes, render, len(rows))
+    return _process_bounded_rows(
+        result["columns"],
+        result["rows"],
+        format,
+        elapsed_ms,
+        has_more=result["has_more"],
+    )
 
 
 def _validate_sql_params(query: str, format: str, limit: int) -> int:
@@ -1114,24 +1130,13 @@ async def execute_tql(
     try:
         columns, rows = await asyncio.to_thread(_sync_tql)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(
+        return _process_bounded_rows(
             columns,
             rows,
             format,
-            mask_enabled=state.mask_enabled,
-            mask_patterns=state.mask_patterns,
+            elapsed_ms,
+            meta={"tql": tql},
         )
-
-        if format == "json":
-            meta = {
-                "tql": tql,
-                "data": json.loads(formatted),
-                "row_count": len(rows),
-                "execution_time_ms": round(elapsed_ms, 2),
-            }
-            return json.dumps(meta, indent=2, ensure_ascii=False)
-
-        return formatted
 
     except Error as e:
         logger.error(f"Error executing TQL '{tql}': {e}")
@@ -1219,24 +1224,13 @@ async def query_range(
     try:
         columns, rows = await asyncio.to_thread(_sync_range)
         elapsed_ms = (time.time() - start_time) * 1000
-        formatted = format_results(
+        return _process_bounded_rows(
             columns,
             rows,
             format,
-            mask_enabled=state.mask_enabled,
-            mask_patterns=state.mask_patterns,
+            elapsed_ms,
+            meta={"query": query},
         )
-
-        if format == "json":
-            meta = {
-                "query": query,
-                "data": json.loads(formatted),
-                "row_count": len(rows),
-                "execution_time_ms": round(elapsed_ms, 2),
-            }
-            return json.dumps(meta, indent=2, ensure_ascii=False)
-
-        return formatted
 
     except Error as e:
         logger.error(f"Error executing range query '{query}': {e}")
