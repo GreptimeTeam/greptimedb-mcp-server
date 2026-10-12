@@ -227,15 +227,55 @@ def _parse_json_column(value, column: str, expected: type):
     return parsed, None, None
 
 
-def guidance(profile: dict) -> list[str]:
-    """Query hints derived from a table's semantic profile."""
+# Columns the OTLP ingest path writes for each signal, named after
+# src/common/catalog/src/consts.rs and src/servers/src/otlp/logs.rs. Only the
+# ones a table actually has are ever reported: a table shaped by a different
+# pipeline must not be told it holds columns it lacks.
+SIGNAL_QUERY_COLUMNS = {
+    "trace": (
+        "service_name",
+        "span_name",
+        "span_kind",
+        "span_status_code",
+        "duration_nano",
+        "trace_id",
+    ),
+    "log": (
+        "severity_text",
+        "severity_number",
+        "body",
+        "service_name",
+        "trace_id",
+    ),
+}
+
+
+def guidance(profile: dict, columns: list[str] | None = None) -> list[str]:
+    """Query hints derived from a table's semantic profile.
+
+    `columns` is the table's actual column names. Passing them lets the signal
+    hints name the columns this table really has instead of describing a query
+    shape in the abstract.
+    """
     if not profile.get("included"):
         return []
 
     hints = _availability_guidance(profile)
     hints.extend(_entity_declaration_guidance(profile))
-    hints.extend(_signal_guidance(profile))
+    hints.extend(_signal_guidance(profile, columns))
     return hints
+
+
+def _present_columns(signal_type: str, columns: list[str] | None) -> list[str]:
+    """The signal's well-known columns that this table actually carries."""
+    if not columns:
+        return []
+    present = set(columns)
+    return [
+        column
+        for column in SIGNAL_QUERY_COLUMNS.get(signal_type, ())
+        if column in present
+    ]
 
 
 def _availability_guidance(profile: dict) -> list[str]:
@@ -294,7 +334,12 @@ def _entity_declaration_guidance(profile: dict) -> list[str]:
     if types:
         hints.append(
             f"This table contributes these semantic entities: {', '.join(types)}. "
-            "Each declaration's id lists the identifying columns, in order."
+            "Each declaration's id lists the identifying references, in order. "
+            "A reference is usually a column name, but on a Trace V2 table it "
+            "can be an attribute key inside a JSON column, written "
+            "`resource_attributes.host.id`. Such a reference is not itself a "
+            "column and does not appear in the schema above; read it with "
+            "json_get on the named column."
         )
     # Only a hand-written declaration can drop the qualifier: it replaces the
     # convention for that entity type outright, so one that omits id_qualifier
@@ -322,21 +367,29 @@ def _entity_declaration_guidance(profile: dict) -> list[str]:
     return hints
 
 
-def _signal_guidance(profile: dict) -> list[str]:
+def _signal_guidance(profile: dict, columns: list[str] | None = None) -> list[str]:
     signal_type = profile.get("signal_type")
     options = profile.get("options") or {}
     metric_type = options.get("metric.type")
 
     if signal_type == "trace":
-        return [
-            "This table represents traces. Prefer latency, error span, and "
-            "service-level aggregation queries."
-        ]
+        hints = ["This table represents traces."]
+        present = _present_columns("trace", columns)
+        if present:
+            hints.append(
+                "Latency and error analysis use these columns, which this "
+                f"table has: {', '.join(present)}."
+            )
+        return hints
     if signal_type == "log":
-        return [
-            "This table represents logs. Prefer full-text search plus "
-            "severity, time, and service aggregations."
-        ]
+        hints = ["This table represents logs."]
+        present = _present_columns("log", columns)
+        if present:
+            hints.append(
+                "Severity, message and correlation live in these columns, "
+                f"which this table has: {', '.join(present)}."
+            )
+        return hints
     if signal_type != "metric":
         return []
 

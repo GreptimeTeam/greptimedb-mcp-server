@@ -239,6 +239,12 @@ def test_config_allow_write_rejects_invalid_cli_value():
                 Config.from_env_arguments()
 
 
+def test_config_max_result_bytes_from_env():
+    with patch.dict(os.environ, {"GREPTIMEDB_MAX_RESULT_BYTES": "4096"}, clear=True):
+        with patch("sys.argv", ["script_name"]):
+            assert Config.from_env_arguments().max_result_bytes == 4096
+
+
 class TestParseCommaSeparated:
     """Tests for _parse_comma_separated helper function."""
 

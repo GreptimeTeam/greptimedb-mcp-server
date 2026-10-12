@@ -365,6 +365,40 @@ def test_guidance_when_the_table_declares_no_entities():
     assert "declares no semantic entities" in hints[0]
 
 
+def test_signal_guidance_names_only_columns_the_table_has():
+    """A column hint is a fact about this table, not about a generic one."""
+    profile = {
+        "included": True,
+        "available": True,
+        "found": True,
+        "entity_declarations": [],
+        "signal_type": "trace",
+    }
+
+    hints = " ".join(guidance(profile, ["timestamp", "service_name", "duration_nano"]))
+
+    assert "service_name" in hints
+    assert "duration_nano" in hints
+    # Absent from the table, so it must not be suggested.
+    assert "span_kind" not in hints
+
+
+def test_signal_guidance_omits_the_column_hint_when_none_match():
+    """A table shaped by another pipeline gets the signal, not a column list."""
+    profile = {
+        "included": True,
+        "available": True,
+        "found": True,
+        "entity_declarations": [],
+        "signal_type": "trace",
+    }
+
+    hints = guidance(profile, ["ts", "payload"])
+
+    assert any("represents traces" in hint for hint in hints)
+    assert not any("which this table has" in hint for hint in hints)
+
+
 def test_guidance_separates_permission_denied_from_an_absent_view():
     denied = guidance(
         {"included": True, "available": False, "reason": "permission_denied"}
@@ -383,6 +417,23 @@ async def test_search_ranks_by_matched_term_count(app_state):
     assert result["matches"][0]["table"] == "redis_used_memory"
     assert result["matches"][0]["matched_terms"] == ["redis", "used", "memory"]
     assert result["matched_table_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_search_scopes_to_the_requested_schema(app_state):
+    """`schema` overrides the connected database; omitting it keeps it."""
+    searched = []
+
+    def fake_search(cursor, table_schema, request):
+        searched.append(table_schema)
+        return {"available": True, "matches": [], "matched_table_count": 0}
+
+    app_state.table_semantics.search = fake_search
+
+    await server.search_table_semantics(query="redis memory")
+    await server.search_table_semantics(query="redis memory", schema="other_db")
+
+    assert searched == ["testdb", "other_db"]
 
 
 @pytest.mark.asyncio

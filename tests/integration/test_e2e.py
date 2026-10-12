@@ -229,7 +229,7 @@ transform:
 
 async def test_pipeline_lifecycle(seed):
     name = "it_lifecycle_pipeline"
-    async with stdio_session() as client:
+    async with stdio_session(**{"--allow-write": "true"}) as client:
         created = await call_text(
             client, "create_pipeline", {"name": name, "pipeline": PIPELINE_YAML}
         )
@@ -266,7 +266,7 @@ async def test_dashboard_lifecycle(seed):
     definition = json.dumps(
         {"kind": "Dashboard", "metadata": {"name": name}, "spec": {"panels": {}}}
     )
-    async with stdio_session() as client:
+    async with stdio_session(**{"--allow-write": "true"}) as client:
         created = await call_text(
             client, "create_dashboard", {"name": name, "definition": definition}
         )
@@ -278,6 +278,25 @@ async def test_dashboard_lifecycle(seed):
         finally:
             deleted = await call_text(client, "delete_dashboard", {"name": name})
     assert "deleted successfully" in deleted
+
+
+async def test_read_only_refuses_writes_without_reaching_the_server(seed):
+    """The refusal has to land before GreptimeDB is touched.
+
+    The in-process tests show the gate raises; only a real instance shows
+    nothing was written behind it.
+    """
+    name = "it_gated_dashboard"
+    definition = json.dumps({"kind": "Dashboard", "metadata": {"name": name}})
+    async with stdio_session() as client:
+        refused = await client.call_tool(
+            "create_dashboard", {"name": name, "definition": definition}
+        )
+        assert refused.is_error
+        assert "read-only mode" in refused.content[0].text
+
+        listed = json.loads(await call_text(client, "list_dashboards"))
+    assert not any(d["name"] == name for d in listed["dashboards"])
 
 
 async def test_prompts_render(seed):
