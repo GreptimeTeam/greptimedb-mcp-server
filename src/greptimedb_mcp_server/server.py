@@ -132,14 +132,11 @@ def get_state() -> AppState:
 def _split_table_reference(table: str, default_schema: str) -> tuple[str, str]:
     """Split a possibly-qualified table reference into (schema, table).
 
-    Metadata queries are scoped to the connected catalog, so a catalog
-    qualifier cannot be honored.
+    A catalog prefix is accepted but ignored: metadata and sample queries
+    use the connected catalog. validate_table_name limits input to three
+    unquoted segments.
     """
     parts = table.split(".")
-    if len(parts) == 3:
-        raise ValueError(
-            "Catalog-qualified names are not supported; use table or schema.table"
-        )
     if len(parts) == 1:
         return default_schema, parts[0]
     return parts[-2], parts[-1]
@@ -434,7 +431,7 @@ def _require_write(operation: str) -> None:
     if not get_state().allow_write:
         raise ValueError(
             f"{operation} changes stored server state and is refused in "
-            "read-only mode. Restart the server with --allow-write (or "
+            "read-only mode. Restart the server with --allow-write true (or "
             "GREPTIMEDB_ALLOW_WRITE=true) to allow it."
         )
 
@@ -676,7 +673,8 @@ async def describe_table(
         str,
         Field(
             description=(
-                "Unquoted table or schema.table name. Catalog qualifiers are not supported."
+                "Unquoted table, schema.table, or catalog.schema.table name. "
+                "A catalog prefix is ignored; reads use the connected catalog."
             )
         ),
     ],

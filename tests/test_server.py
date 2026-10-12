@@ -994,13 +994,17 @@ async def test_describe_table_schema_qualified():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("table", ["greptime.public.users", "other.public.users"])
-async def test_describe_table_rejects_catalog_qualifier(table):
-    with pytest.raises(ToolError, match="Catalog-qualified"):
-        await describe_table(table=table)
+async def test_describe_table_catalog_qualified(table):
+    result = await describe_table(table=table)
+    data = json.loads(result)
+    assert data["table_schema"] == "public"
+    assert data["table_name"] == "users"
+    assert data["schema"]["time_index"] == "ts"
 
 
 @pytest.mark.asyncio
-async def test_describe_table_schema_qualified_sample():
+@pytest.mark.parametrize("table", ["public.users", "greptime.public.users"])
+async def test_describe_table_qualified_sample(table):
     """Samples use the same schema as the metadata query."""
     executed = []
 
@@ -1055,7 +1059,7 @@ async def test_describe_table_schema_qualified_sample():
     server._state.pool = None
     server._state.get_connection = lambda: Connection()
 
-    result = await describe_table(table="public.users")
+    result = await describe_table(table=table)
     data = json.loads(result)
 
     sample_query = next(q for q in executed if "SELECT * FROM" in q)

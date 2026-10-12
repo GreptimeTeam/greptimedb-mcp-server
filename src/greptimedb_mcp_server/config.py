@@ -2,12 +2,7 @@ import argparse
 from dataclasses import dataclass
 import os
 
-# A backstop against a result no caller could consume, not a shaper of normal
-# ones. Measured as JSON at the default `limit` of 1000 rows: 79KB for a
-# 3-column metric table, 256KB for 8-column logs, 1MB for 29-column traces.
-# A tighter budget would cut ordinary log and trace reads, not pathological
-# ones.
-DEFAULT_MAX_RESULT_BYTES = 256 * 1024
+DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
 
 
 @dataclass
