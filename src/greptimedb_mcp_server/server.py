@@ -52,6 +52,7 @@ from mysql.connector.pooling import MySQLConnectionPool
 RESULTS_LIMIT = 100
 MAX_QUERY_LIMIT = 10000
 MAX_SAMPLE_LIMIT = 20
+ERRNO_TABLE_NOT_FOUND = 1146
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -1536,6 +1537,10 @@ async def list_pipelines(
         return result
 
     except Error as e:
+        # greptime_private.pipelines is created with the first pipeline, so on
+        # a fresh instance its absence just means there are none yet.
+        if getattr(e, "errno", None) == ERRNO_TABLE_NOT_FOUND:
+            return "No pipelines found."
         logger.error(f"Error listing pipelines: {e}")
         return f"Error listing pipelines: {str(e)}"
 

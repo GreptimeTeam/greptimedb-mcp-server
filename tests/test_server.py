@@ -1221,6 +1221,49 @@ async def test_list_pipelines_with_name():
     assert "No pipelines found." in result or "name" in result
 
 
+def _fail_pipelines_query(monkeypatch, errno, msg):
+    """Make the pipelines query raise a MySQL error with the given errno."""
+    import conftest
+    from mysql.connector import Error
+
+    original = conftest.MockCursor.execute
+
+    def failing(self, query, args=None):
+        if "GREPTIME_PRIVATE.PIPELINES" in query.upper():
+            error = Error(msg)
+            error.errno = errno
+            raise error
+        original(self, query, args)
+
+    monkeypatch.setattr(conftest.MockCursor, "execute", failing)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [None, "test_pipeline"])
+async def test_list_pipelines_before_first_pipeline_exists(monkeypatch, name):
+    """greptime_private.pipelines is created with the first pipeline.
+
+    On a fresh instance the table is missing, which means there are no
+    pipelines yet, the same answer as after they have all been deleted.
+    """
+    _fail_pipelines_query(
+        monkeypatch,
+        1146,
+        "(TableNotFound): Table not found: greptime.greptime_private.pipelines",
+    )
+    result = await list_pipelines(name=name)
+    assert result == "No pipelines found."
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_still_reports_other_errors(monkeypatch):
+    """Only a missing table is treated as empty; other failures stay visible."""
+    _fail_pipelines_query(monkeypatch, 1142, "SELECT command denied")
+    result = await list_pipelines()
+    assert result.startswith("Error listing pipelines:")
+    assert "SELECT command denied" in result
+
+
 @pytest.mark.asyncio
 async def test_create_pipeline_invalid_name(write_mode):
     """Test create_pipeline with invalid name"""
