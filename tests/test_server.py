@@ -1222,6 +1222,72 @@ async def test_list_pipelines_with_name():
 
 
 @pytest.mark.asyncio
+async def test_list_pipelines_missing_table_returns_empty():
+    """A fresh instance with no pipeline table yet is reported as empty, not an error."""
+
+    class Cursor:
+        def execute(self, query, args=None):
+            error = server.Error("Table 'greptime_private.pipelines' doesn't exist")
+            error.errno = 1146
+            raise error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await list_pipelines()
+    assert result == "No pipelines found."
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_other_error_still_reported():
+    """Non-TableNotFound database errors must not be masked as an empty list."""
+
+    class Cursor:
+        def execute(self, query, args=None):
+            error = server.Error("connection lost")
+            error.errno = 2013
+            raise error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    server._state.pool = None
+    server._state.get_connection = lambda: Connection()
+
+    result = await list_pipelines()
+    assert "Error listing pipelines" in result
+
+
+@pytest.mark.asyncio
 async def test_create_pipeline_invalid_name(write_mode):
     """Test create_pipeline with invalid name"""
     with pytest.raises(ToolError) as excinfo:
