@@ -588,15 +588,15 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
             cursor.execute(query)
             stmt = normalize_sql(query)
 
-            if stmt.startswith("SHOW DATABASES"):
-                return _single_column_listing(cursor, limit, "Database")
+            # The driver metadata determines whether execution produced rows;
+            # SQL comment normalization is only a formatting/classification hint.
+            if cursor.description is not None:
+                if stmt.startswith("SHOW DATABASES"):
+                    return _single_column_listing(cursor, limit, "Database")
 
-            if stmt.startswith("SHOW TABLES"):
-                return _single_column_listing(cursor, limit, "Tables")
+                if stmt.startswith("SHOW TABLES"):
+                    return _single_column_listing(cursor, limit, "Tables")
 
-            if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
-                if cursor.description is None:
-                    return {"type": "error", "message": "Query returned no results"}
                 columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchmany(limit)
                 has_more = cursor.fetchone() is not None
@@ -610,6 +610,9 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
                     "rows": rows,
                     "has_more": has_more,
                 }
+
+            if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
+                return {"type": "error", "message": "Query returned no results"}
 
             conn.commit()
             return {"type": "modify", "rowcount": cursor.rowcount}

@@ -280,15 +280,20 @@ def sql_result_connection(monkeypatch):
 @pytest.mark.parametrize("allow_write", [False, True])
 @pytest.mark.parametrize("fmt", ["csv", "json", "markdown"])
 @pytest.mark.parametrize(
-    "prefix",
-    ["", "/* query tag */ ", "-- query tag\n", " \n/* tag\n */ -- tag\r\n"],
+    "query",
+    [
+        "SELECT 1 AS value",
+        "/* query tag */ SELECT 1 AS value",
+        "-- query tag\nSELECT 1 AS value",
+        " \n/* tag\n */ -- tag\r\nSELECT 1 AS value",
+        "-- query tag /*\nSELECT 1 AS value /* trailing tag */",
+    ],
 )
 async def test_execute_sql_commented_select(
-    sql_result_connection, prefix, fmt, allow_write
+    sql_result_connection, query, fmt, allow_write
 ):
     connection, cursor = sql_result_connection
     server._state.allow_write = allow_write
-    query = prefix + "SELECT 1 AS value"
 
     result = await execute_sql(query=query, format=fmt)
 
@@ -309,18 +314,21 @@ async def test_execute_sql_commented_select(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prefix", ["/* query tag */ ", "-- query tag\n"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "/* query tag */ SELECT value FROM metrics",
+        "-- query tag\nSELECT value FROM metrics",
+        "-- query tag /*\nSELECT 1 AS value /* trailing tag */",
+    ],
+)
 async def test_execute_sql_commented_select_drains_truncated_result(
-    sql_result_connection, prefix
+    sql_result_connection, query
 ):
     connection, cursor = sql_result_connection
     cursor.fetchone.side_effect = [(2,), (3,), None]
 
-    payload = json.loads(
-        await execute_sql(
-            query=prefix + "SELECT value FROM metrics", limit=1, format="json"
-        )
-    )
+    payload = json.loads(await execute_sql(query=query, limit=1, format="json"))
 
     assert payload["data"] == [{"value": 1}]
     assert payload["row_count"] == 1
@@ -331,29 +339,39 @@ async def test_execute_sql_commented_select_drains_truncated_result(
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_commented_select_empty_result(sql_result_connection):
+@pytest.mark.parametrize(
+    "query",
+    [
+        "/* query tag */ SELECT 1 WHERE false",
+        "-- query tag /*\nSELECT 1 AS value /* trailing tag */",
+    ],
+)
+async def test_execute_sql_commented_select_empty_result(sql_result_connection, query):
     connection, cursor = sql_result_connection
     cursor.fetchmany.return_value = []
 
-    payload = json.loads(
-        await execute_sql(query="/* query tag */ SELECT 1 WHERE false", format="json")
-    )
+    payload = json.loads(await execute_sql(query=query, format="json"))
 
     assert payload["data"] == []
     assert payload["row_count"] == 0
     assert payload["truncated"] is False
+    cursor.fetchmany.assert_called_once_with(1000)
+    cursor.fetchone.assert_called_once_with()
     connection.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["", "/* query tag */ ", "-- query tag\n"])
-async def test_execute_sql_commented_select_missing_metadata(
-    sql_result_connection, prefix
+@pytest.mark.parametrize(
+    "query", ["SELECT 1 AS value", "SHOW TABLES", "SHOW DATABASES"]
+)
+async def test_execute_sql_commented_read_missing_metadata(
+    sql_result_connection, prefix, query
 ):
     connection, cursor = sql_result_connection
     cursor.description = None
 
-    result = await execute_sql(query=prefix + "SELECT 1 AS value")
+    result = await execute_sql(query=prefix + query)
 
     assert result == "Error: Query returned no results"
     cursor.fetchmany.assert_not_called()
