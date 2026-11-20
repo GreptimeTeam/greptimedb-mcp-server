@@ -16,6 +16,7 @@ from greptimedb_mcp_server.formatter import (
     VALID_FORMATS,
 )
 from greptimedb_mcp_server.utils import (
+    normalize_sql,
     security_gate,
     templates_loader,
     validate_table_name,
@@ -585,7 +586,7 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
     with state.get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(query)
-            stmt = query.strip().upper()
+            stmt = normalize_sql(query)
 
             if stmt.startswith("SHOW DATABASES"):
                 return _single_column_listing(cursor, limit, "Database")

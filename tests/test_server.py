@@ -2,6 +2,7 @@ import pytest
 import json
 import logging
 from dataclasses import replace
+from unittest.mock import MagicMock
 
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
@@ -260,6 +261,152 @@ async def test_execute_sql_select():
     assert "id,name" in result
     assert "1," in result
     assert "John" in result
+
+
+@pytest.fixture
+def sql_result_connection(monkeypatch):
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.description = [("value", None)]
+    cursor.rowcount = -1
+    cursor.fetchmany.return_value = [(1,)]
+    cursor.fetchone.return_value = None
+    monkeypatch.setattr(server.AppState, "get_connection", lambda _: connection)
+    return connection, cursor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_write", [False, True])
+@pytest.mark.parametrize("fmt", ["csv", "json", "markdown"])
+@pytest.mark.parametrize(
+    "prefix",
+    ["", "/* query tag */ ", "-- query tag\n", " \n/* tag\n */ -- tag\r\n"],
+)
+async def test_execute_sql_commented_select(
+    sql_result_connection, prefix, fmt, allow_write
+):
+    connection, cursor = sql_result_connection
+    server._state.allow_write = allow_write
+    query = prefix + "SELECT 1 AS value"
+
+    result = await execute_sql(query=query, format=fmt)
+
+    if fmt == "json":
+        payload = json.loads(result)
+        assert payload["data"] == [{"value": 1}]
+        assert payload["row_count"] == 1
+        assert payload["truncated"] is False
+    elif fmt == "csv":
+        assert result.splitlines() == ["value", "1"]
+    else:
+        assert "| value |" in result
+        assert "| 1 |" in result
+    cursor.execute.assert_called_once_with(query)
+    cursor.fetchmany.assert_called_once_with(1000)
+    cursor.fetchone.assert_called_once_with()
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["/* query tag */ ", "-- query tag\n"])
+async def test_execute_sql_commented_select_drains_truncated_result(
+    sql_result_connection, prefix
+):
+    connection, cursor = sql_result_connection
+    cursor.fetchone.side_effect = [(2,), (3,), None]
+
+    payload = json.loads(
+        await execute_sql(
+            query=prefix + "SELECT value FROM metrics", limit=1, format="json"
+        )
+    )
+
+    assert payload["data"] == [{"value": 1}]
+    assert payload["row_count"] == 1
+    assert payload["truncated"] is True
+    cursor.fetchmany.assert_called_once_with(1)
+    assert cursor.fetchone.call_count == 3
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_commented_select_empty_result(sql_result_connection):
+    connection, cursor = sql_result_connection
+    cursor.fetchmany.return_value = []
+
+    payload = json.loads(
+        await execute_sql(query="/* query tag */ SELECT 1 WHERE false", format="json")
+    )
+
+    assert payload["data"] == []
+    assert payload["row_count"] == 0
+    assert payload["truncated"] is False
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["", "/* query tag */ ", "-- query tag\n"])
+async def test_execute_sql_commented_select_missing_metadata(
+    sql_result_connection, prefix
+):
+    connection, cursor = sql_result_connection
+    cursor.description = None
+
+    result = await execute_sql(query=prefix + "SELECT 1 AS value")
+
+    assert result == "Error: Query returned no results"
+    cursor.fetchmany.assert_not_called()
+    cursor.fetchone.assert_not_called()
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["SHOW TABLES", "SHOW DATABASES"])
+@pytest.mark.parametrize("prefix", ["/* query tag */ ", "-- query tag\n"])
+async def test_execute_sql_commented_show_listing(sql_result_connection, prefix, query):
+    connection, cursor = sql_result_connection
+    cursor.description = [("name", None)]
+    cursor.fetchmany.return_value = [("public",)]
+    cursor.fetchone.side_effect = [("other",), None]
+
+    result = await execute_sql(query=prefix + query, limit=1, format="json")
+
+    assert result.startswith("name\npublic\n[truncated at 1 rows;")
+    cursor.execute.assert_called_once_with(prefix + query)
+    cursor.fetchmany.assert_called_once_with(1)
+    assert cursor.fetchone.call_count == 2
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["", "/* query tag */ ", "-- query tag\n"])
+async def test_execute_sql_commented_write_commits(sql_result_connection, prefix):
+    connection, cursor = sql_result_connection
+    server._state.allow_write = True
+    cursor.description = None
+    cursor.rowcount = 2
+    query = prefix + "INSERT INTO metrics VALUES (1)"
+
+    result = await execute_sql(query=query)
+
+    assert result == "Query executed successfully. Rows affected: 2"
+    cursor.execute.assert_called_once_with(query)
+    cursor.fetchmany.assert_not_called()
+    cursor.fetchone.assert_not_called()
+    connection.commit.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["", "/* query tag */ ", "-- query tag\n"])
+async def test_execute_sql_commented_write_still_blocked(sql_result_connection, prefix):
+    connection, cursor = sql_result_connection
+
+    result = await execute_sql(query=prefix + "DROP TABLE users")
+
+    assert "Dangerous operation blocked" in result
+    cursor.execute.assert_not_called()
+    connection.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
