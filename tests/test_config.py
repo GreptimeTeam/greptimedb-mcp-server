@@ -28,6 +28,7 @@ def test_config_default_values():
             assert config.allow_write is False
             assert config.allowed_hosts == []
             assert config.allowed_origins == []
+            assert config.query_read_timeout == 30
 
 
 def test_config_env_variables():
@@ -50,6 +51,7 @@ def test_config_env_variables():
         "GREPTIMEDB_ALLOW_WRITE": "true",
         "GREPTIMEDB_ALLOWED_HOSTS": "localhost:*,127.0.0.1:*",
         "GREPTIMEDB_ALLOWED_ORIGINS": "http://localhost:*,https://example.com",
+        "GREPTIMEDB_QUERY_READ_TIMEOUT": "60",
     }
 
     with patch.dict(os.environ, env_vars):
@@ -74,6 +76,7 @@ def test_config_env_variables():
                 "http://localhost:*",
                 "https://example.com",
             ]
+            assert config.query_read_timeout == 60
 
 
 def test_config_cli_arguments():
@@ -112,6 +115,8 @@ def test_config_cli_arguments():
         "my-service.namespace:*",
         "--allowed-origins",
         "http://my-app.example.com",
+        "--query-read-timeout",
+        "45",
     ]
 
     with patch.dict(os.environ, {}, clear=True):
@@ -133,6 +138,7 @@ def test_config_cli_arguments():
             assert config.allow_write is True
             assert config.allowed_hosts == ["my-service.namespace:*"]
             assert config.allowed_origins == ["http://my-app.example.com"]
+            assert config.query_read_timeout == 45
 
 
 def test_config_precedence():
@@ -267,3 +273,26 @@ class TestParseCommaSeparated:
             "localhost:*",
             "127.0.0.1:*",
         ]
+
+
+@pytest.mark.parametrize("env_value", ["0", "-1", "-30", "abc"])
+def test_config_query_read_timeout_rejects_invalid_env_value(env_value):
+    with patch.dict(
+        os.environ,
+        {"GREPTIMEDB_QUERY_READ_TIMEOUT": env_value},
+        clear=True,
+    ):
+        with patch("sys.argv", ["script_name"]):
+            with pytest.raises(SystemExit):
+                Config.from_env_arguments()
+
+
+@pytest.mark.parametrize("cli_value", ["0", "-1", "-30", "abc"])
+def test_config_query_read_timeout_rejects_invalid_cli_value(cli_value):
+    with patch.dict(os.environ, {}, clear=True):
+        with patch(
+            "sys.argv",
+            ["script_name", "--query-read-timeout", cli_value],
+        ):
+            with pytest.raises(SystemExit):
+                Config.from_env_arguments()

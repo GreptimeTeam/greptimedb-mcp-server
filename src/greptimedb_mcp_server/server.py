@@ -304,6 +304,7 @@ async def lifespan(mcp: MCPServer):
         "password": config.password,
         "database": config.database,
         "time_zone": config.time_zone,
+        "read_timeout": config.query_read_timeout,
     }
     pool_config = {
         "pool_name": "greptimedb_pool",
