@@ -9,6 +9,7 @@ from greptimedb_mcp_server.utils import (
     is_sql_time_expression,
     format_tql_time_param,
     validate_time_expression,
+    validate_query_component,
     _truncate_value,
     _format_audit_params,
     audit_log,
@@ -159,50 +160,98 @@ def test_empty_queries():
     assert security_gate(None) == (True, "Empty query not allowed")
 
 
-def test_dangerous_operations():
-    """Test dangerous operations"""
-    assert security_gate("DROP TABLE users") == (True, "Forbidden `DROP` operation")
-    assert security_gate("DELETE FROM users") == (True, "Forbidden `DELETE` operation")
-    assert security_gate("UPDATE users SET name='test'") == (
-        True,
-        "Forbidden `UPDATE` operation",
-    )
-    assert security_gate("INSERT INTO users VALUES (1)") == (
-        True,
-        "Forbidden `INSERT` operation",
-    )
-
-
-def test_multiple_statements():
-    """Test multiple statements with dangerous operations"""
-    # Safe multiple SELECT statements are now allowed
-    assert security_gate("SELECT * FROM users; SELECT * FROM test") == (False, "")
-    # Dangerous multiple statements are blocked (DROP detected first)
-    result = security_gate("SELECT * FROM users; DROP TABLE test")
-    assert result[0] is True
-
-
-def test_comment_bypass():
-    """Test comment bypass attempts"""
-    assert security_gate("DROP/**/TABLE users") == (True, "Forbidden `DROP` operation")
-    assert security_gate("DROP--comment\nTABLE users") == (
-        True,
-        "Forbidden `DROP` operation",
-    )
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT * FROM users",
+        "SELECT * FROM users; SELECT * FROM test",
+        "SELECT 1;",
+        "(SELECT 1)",
+        "EXPLAIN SELECT * FROM users",
+        "EXPLAIN ANALYZE VERBOSE SELECT * FROM users",
+        "WITH t AS (SELECT 1) SELECT * FROM t",
+        "TQL EVAL ('now-1h', 'now', '1m') rate(x[5m])",
+        "SHOW TABLES",
+        "SHOW CREATE TABLE my_table",
+        "show create table my_schema.my_table",
+        "DESCRIBE users",
+        "SELECT * FROM users UNION SELECT * FROM admins",
+        "SELECT * FROM INFORMATION_SCHEMA.TABLES",
+        # Encoded values cannot become statements without dynamic SQL, which
+        # is not an allowed leading keyword.
+        "SELECT 0x44524f50205441424c45",
+        "SELECT UNHEX('44524f50')",
+        "SELECT CHAR(68,82,79,80)",
+        # Write keywords inside strings, quoted identifiers and comments.
+        "SELECT 'DROP TABLE users; --' AS s",
+        'SELECT `delete`, "update" FROM t',
+        "/* DROP TABLE users */ SELECT 1",
+        "-- DROP TABLE users\nSELECT 1",
+        "# DROP TABLE users\nSELECT 1",
+        # `--` without trailing whitespace is two minus signs.
+        "SELECT 1--1",
+        # The backslash escapes the quote, so this is one string literal.
+        "SELECT 'a\\'; DROP TABLE t; -- '",
+        "SELECT 'it''s'",
+        # Line comments end at \n only, so the DROP is part of the comment.
+        "SELECT 1 -- x\r; DROP TABLE t",
+    ],
+)
+def test_security_gate_allows_reads(query):
+    assert security_gate(query) == (False, "")
 
 
 @pytest.mark.parametrize(
-    "query,expected",
+    "query,reason",
     [
-        ("SELECT * FROM users", (False, "")),
-        ("DROP TABLE users", (True, "Forbidden `DROP` operation")),
-        ("DELETE FROM users", (True, "Forbidden `DELETE` operation")),
-        ("", (True, "Empty query not allowed")),
+        ("DROP TABLE users", "Forbidden `DROP` operation"),
+        ("DELETE FROM users", "Forbidden `DELETE` operation"),
+        ("UPDATE users SET name='test'", "Forbidden `UPDATE` operation"),
+        ("INSERT INTO users VALUES (1)", "Forbidden `INSERT` operation"),
+        ("ALTER TABLE users ADD COLUMN x INT", "Forbidden `ALTER` operation"),
+        ("CREATE TABLE new_table (id INT)", "Forbidden `CREATE` operation"),
+        ("GRANT SELECT ON users TO user1", "Forbidden `GRANT` operation"),
+        ("REVOKE SELECT ON users FROM user1", "Forbidden `REVOKE` operation"),
+        ("TRUNCATE TABLE users", "Forbidden `TRUNCATE` operation"),
+        ("LOAD DATA INFILE '/etc/passwd' INTO TABLE users", "`LOAD`"),
+        ("COPY users TO '/tmp/data.csv'", "Forbidden `COPY` operation"),
+        ("EXEC sp_executesql 'SELECT 1'", "Forbidden `EXEC` operation"),
+        ("EXECUTE immediate 'SELECT * FROM users'", "Forbidden `EXECUTE` operation"),
+        ("CALL stored_procedure()", "Forbidden `CALL` operation"),
+        ("REPLACE INTO users VALUES (1, 'test')", "Forbidden `REPLACE` operation"),
+        ("ADMIN flush_table('t')", "Forbidden `ADMIN` operation"),
+        ("SET time_zone = 'UTC'", "Forbidden `SET` operation"),
+        ("DROP/**/TABLE users", "Forbidden `DROP` operation"),
+        ("DROP--comment\nTABLE users", "Forbidden `DROP` operation"),
+        ("SELECT * FROM users; DROP TABLE test", "Forbidden `DROP` operation"),
+        ("SELECT * FROM users INTO OUTFILE '/tmp/u.txt'", "Forbidden `INTO` operation"),
+        ("SELECT 'test' INTO DUMPFILE '/tmp/test.txt'", "Forbidden `INTO` operation"),
+        ("SELECT * FROM t FOR UPDATE", "Forbidden `UPDATE` operation"),
+        ("WITH t AS (SELECT 1) INSERT INTO x SELECT * FROM t", "`INSERT`"),
+        ("EXPLAIN ANALYZE INSERT INTO t VALUES (1)", "Forbidden `INSERT` operation"),
+        ("EXPLAIN ANALYZE FORMAT JSON DROP TABLE t", "Forbidden `DROP` operation"),
+        # A comment opener inside a line comment or a string does not start a
+        # block comment, so the DROP after it is code.
+        ("-- x /*\nDROP TABLE users /* */", "Forbidden `DROP` operation"),
+        ("# x /*\nDROP TABLE users /* */", "Forbidden `DROP` operation"),
+        ("SELECT '/*'; DROP TABLE t -- */", "Forbidden `DROP` operation"),
+        ("/*!DROP TABLE t*/ SELECT 1", "MySQL executable comments are not allowed"),
+        (
+            "SELECT X'00'; DROP TABLE t; -- '",
+            "Prefixed string literals are not allowed",
+        ),
+        ("SELECT 1 --\u00a0x", "Ambiguous `--` sequence"),
+        ("SELECT 'abc", "Unterminated quoted string or identifier"),
+        ("SELECT `abc", "Unterminated quoted string or identifier"),
+        ("SELECT 1 /* x", "Unterminated comment"),
+        ("/* only a comment */", "Empty query not allowed"),
+        ("'abc'", "Unrecognized statement"),
     ],
 )
-def test_parametrized_queries(query, expected):
-    """Parametrized test for multiple queries"""
-    assert security_gate(query) == expected
+def test_security_gate_blocks(query, reason):
+    is_dangerous, actual = security_gate(query)
+    assert is_dangerous is True
+    assert reason in actual
 
 
 def test_format_results_csv():
@@ -293,160 +342,29 @@ def test_format_results_markdown_escapes_pipe():
     assert r"c\|d" in result
 
 
-def test_security_gate_alter():
-    """Test security gate blocks ALTER operations"""
-    assert security_gate("ALTER TABLE users ADD COLUMN x INT")[0] is True
+@pytest.mark.parametrize(
+    "value",
+    ["avg(cpu) RANGE '5m'", "host = 'a;b' AND (x > 1)", "count(*) RANGE '1m' FILL 0"],
+)
+def test_validate_query_component_allows(value):
+    assert validate_query_component(value, "select") == value
 
 
-def test_security_gate_create():
-    """Test security gate blocks CREATE operations"""
-    assert security_gate("CREATE TABLE new_table (id INT)")[0] is True
-
-
-def test_security_gate_grant():
-    """Test security gate blocks GRANT operations"""
-    assert security_gate("GRANT SELECT ON users TO user1")[0] is True
-
-
-def test_security_gate_revoke():
-    """Test security gate blocks REVOKE operations"""
-    assert security_gate("REVOKE SELECT ON users FROM user1")[0] is True
-
-
-def test_security_gate_truncate():
-    """Test security gate blocks TRUNCATE operations"""
-    assert security_gate("TRUNCATE TABLE users")[0] is True
-
-
-def test_security_gate_explain():
-    """Test security gate allows EXPLAIN operations"""
-    result = security_gate("EXPLAIN SELECT * FROM users")
-    assert result[0] is False
-
-
-def test_security_gate_with_cte():
-    """Test security gate allows CTE (WITH) queries"""
-    result = security_gate("WITH t AS (SELECT 1) SELECT * FROM t")
-    assert result[0] is False
-
-
-def test_security_gate_tql():
-    """Test security gate allows TQL queries"""
-    result = security_gate("TQL EVAL ('now-1h', 'now', '1m') rate(x[5m])")
-    assert result[0] is False
-
-
-def test_security_gate_show():
-    """Test security gate allows SHOW queries"""
-    result = security_gate("SHOW TABLES")
-    assert result[0] is False
-
-
-def test_security_gate_show_create_table():
-    """Test security gate allows SHOW CREATE TABLE queries"""
-    result = security_gate("SHOW CREATE TABLE my_table")
-    assert result[0] is False
-    result = security_gate("show create table my_schema.my_table")
-    assert result[0] is False
-
-
-def test_security_gate_desc():
-    """Test security gate allows DESC/DESCRIBE queries"""
-    result = security_gate("DESCRIBE users")
-    assert result[0] is False
-
-
-def test_security_gate_load():
-    """Test security gate blocks LOAD operations"""
-    result = security_gate("LOAD DATA INFILE '/etc/passwd' INTO TABLE users")
-    assert result[0] is True
-    assert "LOAD" in result[1]
-
-
-def test_security_gate_copy():
-    """Test security gate blocks COPY operations"""
-    result = security_gate("COPY users TO '/tmp/data.csv'")
-    assert result[0] is True
-    assert "COPY" in result[1]
-
-
-def test_security_gate_outfile():
-    """Test security gate blocks OUTFILE operations"""
-    result = security_gate("SELECT * FROM users INTO OUTFILE '/tmp/users.txt'")
-    assert result[0] is True
-    assert "OUTFILE" in result[1]
-
-
-def test_security_gate_load_file():
-    """Test security gate blocks LOAD_FILE function"""
-    result = security_gate("SELECT LOAD_FILE('/etc/passwd')")
-    assert result[0] is True
-    assert "LOAD_FILE" in result[1]
-
-
-def test_security_gate_union():
-    """Test security gate allows UNION operations"""
-    result = security_gate("SELECT * FROM users UNION SELECT * FROM admins")
-    assert result[0] is False
-
-
-def test_security_gate_information_schema():
-    """Test security gate allows INFORMATION_SCHEMA access"""
-    result = security_gate("SELECT * FROM INFORMATION_SCHEMA.TABLES")
-    assert result[0] is False
-
-
-def test_security_gate_dumpfile():
-    """Test security gate blocks INTO DUMPFILE operations"""
-    result = security_gate("SELECT 'test' INTO DUMPFILE '/tmp/test.txt'")
-    assert result[0] is True
-    assert "DUMPFILE" in result[1]
-
-
-def test_security_gate_exec():
-    """Test security gate blocks EXEC/EXECUTE operations"""
-    result = security_gate("EXEC sp_executesql 'SELECT 1'")
-    assert result[0] is True
-    assert "Dynamic SQL" in result[1]
-
-    result = security_gate("EXECUTE immediate 'SELECT * FROM users'")
-    assert result[0] is True
-    assert "Dynamic SQL" in result[1]
-
-
-def test_security_gate_call():
-    """Test security gate blocks CALL operations"""
-    result = security_gate("CALL stored_procedure()")
-    assert result[0] is True
-    assert "Stored procedure" in result[1]
-
-
-def test_security_gate_replace_into():
-    """Test security gate blocks REPLACE INTO operations"""
-    result = security_gate("REPLACE INTO users VALUES (1, 'test')")
-    assert result[0] is True
-    assert "REPLACE INTO" in result[1]
-
-
-def test_security_gate_hex_encoding():
-    """Test security gate blocks hex-encoded content"""
-    result = security_gate("SELECT 0x44524f50205441424c45")
-    assert result[0] is True
-    assert "Encoded" in result[1]
-
-
-def test_security_gate_unhex():
-    """Test security gate blocks UNHEX function"""
-    result = security_gate("SELECT UNHEX('44524f50')")
-    assert result[0] is True
-    assert "Encoded" in result[1]
-
-
-def test_security_gate_char_function():
-    """Test security gate blocks CHAR function for encoding bypass"""
-    result = security_gate("SELECT CHAR(68,82,79,80)")
-    assert result[0] is True
-    assert "Encoded" in result[1]
+@pytest.mark.parametrize(
+    "value,reason",
+    [
+        ("1=1; DROP TABLE users", "Multiple statements are not allowed"),
+        ("1=1 -- rest", "Comments are not allowed"),
+        ("1=1 /* rest */", "Comments are not allowed"),
+        ("x) UNION (SELECT 1", "Unbalanced parentheses"),
+        ("(x", "Unbalanced parentheses"),
+        ("host = 'a", "Unterminated quoted string or identifier"),
+    ],
+)
+def test_validate_query_component_blocks(value, reason):
+    with pytest.raises(ValueError) as excinfo:
+        validate_query_component(value, "where")
+    assert reason in str(excinfo.value)
 
 
 def test_validate_table_name_simple():
@@ -581,13 +499,6 @@ def test_format_tql_time_param_escapes_quotes():
     assert format_tql_time_param("a''b") == "'a''''b'"
     # SQL expressions are not escaped
     assert format_tql_time_param("now()") == "now()"
-
-
-def test_validate_time_expression_dangerous():
-    """Test validate_time_expression blocks dangerous patterns"""
-    with pytest.raises(ValueError) as excinfo:
-        validate_time_expression("DELETE FROM users", "start")
-    assert "Dangerous pattern" in str(excinfo.value)
 
 
 # Tests for audit logging functions

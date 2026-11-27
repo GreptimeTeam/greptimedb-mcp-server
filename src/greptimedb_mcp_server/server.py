@@ -16,8 +16,9 @@ from greptimedb_mcp_server.formatter import (
     VALID_FORMATS,
 )
 from greptimedb_mcp_server.utils import (
-    normalize_sql,
+    READ_STATEMENT_KEYWORDS,
     security_gate,
+    statement_keywords,
     templates_loader,
     validate_table_name,
     validate_tql_param,
@@ -421,10 +422,6 @@ def tool(**tool_kwargs):
     return decorator
 
 
-# Query type constants
-_READ_COMMANDS = ("SELECT", "SHOW", "DESC", "TQL", "EXPLAIN", "WITH")
-
-
 def _require_write(operation: str) -> None:
     """Refuse a state-changing operation unless write mode is on.
 
@@ -587,15 +584,13 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
     with state.get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(query)
-            stmt = normalize_sql(query)
+            keywords = statement_keywords(query)
 
-            # The driver metadata determines whether execution produced rows;
-            # SQL comment normalization is only a formatting/classification hint.
             if cursor.description is not None:
-                if stmt.startswith("SHOW DATABASES"):
+                if keywords[:2] == ("SHOW", "DATABASES"):
                     return _single_column_listing(cursor, limit, "Database")
 
-                if stmt.startswith("SHOW TABLES"):
+                if keywords[:2] == ("SHOW", "TABLES"):
                     return _single_column_listing(cursor, limit, "Tables")
 
                 columns = [desc[0] for desc in cursor.description]
@@ -612,7 +607,7 @@ def _execute_query(state: AppState, query: str, limit: int) -> dict:
                     "has_more": has_more,
                 }
 
-            if any(stmt.startswith(cmd) for cmd in _READ_COMMANDS):
+            if keywords[:1] and keywords[0] in READ_STATEMENT_KEYWORDS:
                 return {"type": "error", "message": "Query returned no results"}
 
             conn.commit()
@@ -1196,16 +1191,16 @@ async def execute_tql(
     if lookback:
         validate_tql_param(lookback, "lookback")
 
-    is_dangerous, reason = security_gate(query)
-    if is_dangerous:
-        return f"Error: Dangerous operation blocked: {reason}"
-
     start_param = format_tql_time_param(start)
     end_param = format_tql_time_param(end)
     if lookback:
         tql = f"TQL EVAL ({start_param}, {end_param}, '{step}', '{lookback}') {query}"
     else:
         tql = f"TQL EVAL ({start_param}, {end_param}, '{step}') {query}"
+
+    is_dangerous, reason = security_gate(tql)
+    if is_dangerous:
+        return f"Error: Dangerous operation blocked: {reason}"
 
     start_time = time.time()
 
@@ -1390,10 +1385,6 @@ async def explain_query(
     if not query:
         raise ValueError("query is required")
 
-    is_dangerous, reason = security_gate(query)
-    if is_dangerous:
-        return f"Error: Dangerous operation blocked: {reason}"
-
     if query.strip().upper().startswith("TQL"):
         # Replace leading TQL EVAL/EVALUATE with TQL ANALYZE/EXPLAIN [VERBOSE].
         base = "TQL ANALYZE" if analyze else "TQL EXPLAIN"
@@ -1413,6 +1404,10 @@ async def explain_query(
         if verbose:
             keywords += " VERBOSE"
         explain_query_str = f"{keywords} {query}"
+
+    is_dangerous, reason = security_gate(explain_query_str)
+    if is_dangerous:
+        return f"Error: Dangerous operation blocked: {reason}"
 
     def _sync_explain():
         with state.get_connection() as conn:
