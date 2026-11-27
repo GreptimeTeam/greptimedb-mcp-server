@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import os
 
 DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
+DEFAULT_QUERY_READ_TIMEOUT = 30
 
 
 @dataclass
@@ -112,6 +113,8 @@ class Config:
     result is rejected by the client and the whole call is wasted. Clients
     differ in what they accept, so this is configurable.
     """
+    query_read_timeout: int = DEFAULT_QUERY_READ_TIMEOUT
+
 
     @staticmethod
     def from_env_arguments() -> "Config":
@@ -270,6 +273,16 @@ class Config:
             default=os.getenv("GREPTIMEDB_MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),
         )
 
+        parser.add_argument(
+            "--query-read-timeout",
+            type=_parse_positive_int,
+            help="Database query read timeout in seconds (default: 30)",
+            default=os.getenv(
+                "GREPTIMEDB_QUERY_READ_TIMEOUT",
+                str(DEFAULT_QUERY_READ_TIMEOUT),
+            ),
+        )
+
         args = parser.parse_args()
 
         return Config(
@@ -292,6 +305,7 @@ class Config:
             allowed_hosts=_parse_comma_separated(args.allowed_hosts),
             allowed_origins=_parse_comma_separated(args.allowed_origins),
             max_result_bytes=args.max_result_bytes,
+            query_read_timeout=args.query_read_timeout,
         )
 
 
@@ -313,3 +327,15 @@ def _parse_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError(
         "expected a boolean value: true/false, 1/0, yes/no, or on/off"
     )
+
+def _parse_positive_int(value: str) -> int:
+    """Parse a positive integer configuration value."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+
+    return parsed

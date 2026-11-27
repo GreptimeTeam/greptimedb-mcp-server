@@ -2,6 +2,7 @@ import pytest
 import json
 import logging
 from dataclasses import replace
+from unittest.mock import patch
 
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
@@ -64,6 +65,7 @@ def setup_state():
         "password": config.password,
         "database": config.database,
         "time_zone": config.time_zone,
+        "read_timeout": config.query_read_timeout,
     }
     pool_config = {
         "pool_name": "greptimedb_pool",
@@ -87,6 +89,17 @@ def setup_state():
 
     server._state = None
 
+@pytest.mark.asyncio
+async def test_lifespan_passes_query_read_timeout_to_connection_pool():
+    config = replace(
+        server.get_config(),
+        query_read_timeout=45,
+    )
+
+    with patch.object(server, "get_config", return_value=config):
+        async with server.lifespan(server.mcp) as state:
+            assert state.db_config["read_timeout"] == 45
+            assert state.pool_config["read_timeout"] == 45
 
 @pytest.fixture
 def write_mode():
