@@ -208,7 +208,7 @@ class MockCursor:
             return [("id", None), ("name", None), ("ts", None)]
         elif "SELECT" in self.query.upper():
             return [("id", None), ("name", None)]
-        return []
+        return None
 
     def close(self):
         pass

@@ -18,6 +18,13 @@ _PROMPT_TEMPLATE_ENV = SandboxedEnvironment(
 _PROMPT_TEMPLATE_ENV.globals.clear()
 
 
+def normalize_sql(query: str) -> str:
+    """Normalize SQL for checks and classification, not for execution."""
+    clean_query = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)
+    clean_query = re.sub(r"--.*", "", clean_query)
+    return re.sub(r"\s+", " ", clean_query).strip().upper()
+
+
 def security_gate(query: str) -> tuple[bool, str]:
     """
     Simple security check for SQL queries.
@@ -34,10 +41,7 @@ def security_gate(query: str) -> tuple[bool, str]:
         logger.warning(f"Encoded content detected: {query[:50]}...")
         return True, "Encoded query content not allowed"
 
-    # Remove comments and normalize whitespace
-    clean_query = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)
-    clean_query = re.sub(r"--.*", "", clean_query)
-    clean_query = re.sub(r"\s+", " ", clean_query).strip().upper()
+    clean_query = normalize_sql(query)
 
     dangerous_patterns = [
         # DDL/DML operations (must be at start, not in SHOW CREATE TABLE etc.)
