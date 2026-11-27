@@ -50,3 +50,19 @@ def test_query_passed_by_gate_does_not_write(db, probe_table, query):
     cursor = db.cursor()
     cursor.execute(f"SELECT count(*) FROM {PROBE_TABLE}")
     assert cursor.fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 'ok' AS field_delimiter FROM numbers",
+        f"SELECT 1 AS x_delimiter ' FROM t; {INSERT}; -- '",
+    ],
+)
+def test_gate_rejects_sql_the_connector_rewrites(query):
+    # Imported here: unit test runs replace mysql.connector with a mock.
+    from mysql.connector._scripting import split_multi_statement
+
+    sent = next(split_multi_statement(sql_code=query.encode()))["mappable_stmt"]
+    assert sent != query.encode()
+    assert security_gate(query)[0] is True

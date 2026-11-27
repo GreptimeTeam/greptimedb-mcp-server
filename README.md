@@ -194,10 +194,13 @@ identifiers and comments are delimited the same way the server delimits them.
   EXPLAIN or TQL. Every statement in a multi-statement query is checked.
 - **Blocks**: every other statement, including DROP, DELETE, UPDATE, INSERT,
   ALTER, CREATE, TRUNCATE, GRANT, REVOKE, ADMIN, SET, COPY and LOAD
-- **Blocks**: INSERT, UPDATE, DELETE, MERGE and INTO inside an allowed
-  statement, and EXPLAIN of a blocked statement
+- **Blocks**: INSERT, UPDATE, DELETE, MERGE and INTO inside an allowed SQL
+  statement (TQL expressions are not checked for them), and EXPLAIN of a
+  blocked statement
 - **Blocks**: MySQL executable comments (`/*! ... */`), prefixed string
   literals (`X'..'`, `N'..'`), and unterminated strings or comments
+- **Blocks**: the word `delimiter` followed by whitespace outside quotes,
+  because the MySQL client driver rewrites such SQL as a `DELIMITER` command
 
 ### Write Mode (Disabled by Default)
 

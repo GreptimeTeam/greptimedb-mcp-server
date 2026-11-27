@@ -195,6 +195,11 @@ def test_empty_queries():
         "SELECT 'it''s'",
         # Line comments end at \n only, so the DROP is part of the comment.
         "SELECT 1 -- x\r; DROP TABLE t",
+        # A quote right after a keyword opens a plain string.
+        "SELECT'ok'",
+        "SELECT 1 WHERE 'abc' LIKE'a%'",
+        # PromQL label names are not SQL clauses.
+        "TQL EVAL (0, 10, '5s') sum by (merge) (requests_total)",
     ],
 )
 def test_security_gate_allows_reads(query):
@@ -239,6 +244,13 @@ def test_security_gate_allows_reads(query):
         (
             "SELECT X'00'; DROP TABLE t; -- '",
             "Prefixed string literals are not allowed",
+        ),
+        ("SELECT 1b'\\'; DROP TABLE t; -- '", "Prefixed string literals"),
+        # Connector/Python rewrites these before sending them.
+        ("SELECT 'ok' AS field_delimiter FROM numbers", "`delimiter`"),
+        (
+            "SELECT 1 AS x_delimiter ' FROM t; INSERT INTO p VALUES (1); -- '",
+            "`delimiter`",
         ),
         ("SELECT 1 --\u00a0x", "Ambiguous `--` sequence"),
         ("SELECT 'abc", "Unterminated quoted string or identifier"),

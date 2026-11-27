@@ -30,6 +30,18 @@ _FORBIDDEN_CLAUSE_KEYWORDS = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "
 
 _ASCII_WHITESPACE = frozenset(" \t\n\r\v\f")
 
+# Connector/Python (`mysql.connector._scripting.DELIMITER_PATTERN`) treats a
+# match as a client-side DELIMITER command and rewrites the SQL before sending
+# it, so the server would not run the text the gate checked.
+_CONNECTOR_DELIMITER = re.compile(
+    rb"""(delimiter\s+)(?=(?:[^"'`]*(?:"[^"]*"|'[^']*'|`[^`]*`))*[^"'`]*$)""",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+
+# Prefixes the MySQL dialect reads as part of a string literal when they start
+# a token, e.g. B'..', which takes no backslash escapes.
+_STRING_PREFIXES = frozenset("bBnNxX")
+
 
 class SqlLexError(ValueError):
     """SQL whose strings or comments cannot be delimited the way the server does."""
@@ -62,6 +74,15 @@ def _line_end(sql: str, start: int) -> int:
     return len(sql) if end < 0 else end + 1
 
 
+def _has_string_prefix(sql: str, quote: int) -> bool:
+    if quote == 0 or sql[quote - 1] not in _STRING_PREFIXES:
+        return False
+    # Inside a longer word (`SELECT'a'`) the quote opens a plain string. After
+    # a digit the server's reading depends on numeric-prefix rules; reject.
+    before = sql[quote - 2] if quote >= 2 else ""
+    return not (before.isalpha() or before in ("_", "$"))
+
+
 def _lex(sql: str) -> list[tuple[str, str]]:
     """Split SQL into (kind, text) tokens, kind in word/punct/literal/comment.
 
@@ -79,9 +100,7 @@ def _lex(sql: str) -> list[tuple[str, str]]:
         if ch.isspace():
             i += 1
         elif ch in "'\"":
-            # X'..', B'..', N'..' and charset introducers use other escape
-            # rules than plain strings.
-            if i > 0 and _is_word_char(sql[i - 1]):
+            if _has_string_prefix(sql, i):
                 raise SqlLexError("Prefixed string literals are not allowed")
             end = _quoted_end(sql, i, backslash_escape=True)
             tokens.append(("literal", sql[i:end]))
@@ -156,6 +175,11 @@ def _statement_violation(stmt: list[tuple[str, str]]) -> str | None:
             i += 2
         return _statement_violation(stmt[i:])
 
+    if keyword == "TQL":
+        # The server hands the rest of the statement to the PromQL parser, so
+        # its words are metric and label names, not SQL clauses.
+        return None
+
     for kind, text in stmt[i + 1 :]:
         if kind == "word" and text in _FORBIDDEN_CLAUSE_KEYWORDS:
             return f"Forbidden `{text}` operation"
@@ -181,6 +205,9 @@ def security_gate(query: str) -> tuple[bool, str]:
     """
     if not query or not query.strip():
         return True, "Empty query not allowed"
+
+    if _CONNECTOR_DELIMITER.search(query.encode()):
+        return True, "`delimiter` outside quotes is rewritten by the client driver"
 
     try:
         statements = _split_statements(_lex(query))
