@@ -200,6 +200,8 @@ def test_empty_queries():
         "SELECT 1 WHERE 'abc' LIKE'a%'",
         # PromQL label names are not SQL clauses.
         "TQL EVAL (0, 10, '5s') sum by (merge) (requests_total)",
+        "WITH m AS (TQL EVAL (0, 10, '5s') sum by (merge) (requests_total)) "
+        "SELECT * FROM m",
     ],
 )
 def test_security_gate_allows_reads(query):
@@ -235,6 +237,10 @@ def test_security_gate_allows_reads(query):
         ("WITH t AS (SELECT 1) INSERT INTO x SELECT * FROM t", "`INSERT`"),
         ("EXPLAIN ANALYZE INSERT INTO t VALUES (1)", "Forbidden `INSERT` operation"),
         ("EXPLAIN ANALYZE FORMAT JSON DROP TABLE t", "Forbidden `DROP` operation"),
+        (
+            "WITH m AS (TQL EVAL (0, 10, '5s') up) SELECT * FROM m INTO OUTFILE 'f'",
+            "Forbidden `INTO` operation",
+        ),
         # A comment opener inside a line comment or a string does not start a
         # block comment, so the DROP after it is code.
         ("-- x /*\nDROP TABLE users /* */", "Forbidden `DROP` operation"),

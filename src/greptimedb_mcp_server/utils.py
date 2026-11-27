@@ -180,10 +180,33 @@ def _statement_violation(stmt: list[tuple[str, str]]) -> str | None:
         # its words are metric and label names, not SQL clauses.
         return None
 
-    for kind, text in stmt[i + 1 :]:
+    for kind, text in _skip_tql_ctes(stmt[i + 1 :]):
         if kind == "word" and text in _FORBIDDEN_CLAUSE_KEYWORDS:
             return f"Forbidden `{text}` operation"
     return None
+
+
+def _skip_tql_ctes(tokens: list[tuple[str, str]]):
+    """Yield tokens outside `(TQL ...)` groups.
+
+    In `WITH m AS (TQL ...)` the server hands everything up to the matching `)`
+    to the PromQL parser. Elsewhere a `(TQL` group fails to parse as SQL.
+    """
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == ("punct", "(") and tokens[i + 1 : i + 2] == [("word", "TQL")]:
+            depth = 0
+            while i < len(tokens):
+                if tokens[i] == ("punct", "("):
+                    depth += 1
+                elif tokens[i] == ("punct", ")"):
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+        else:
+            yield tokens[i]
+        i += 1
 
 
 def statement_keywords(query: str) -> tuple[str, ...]:
