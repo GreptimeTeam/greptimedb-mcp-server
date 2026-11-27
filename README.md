@@ -186,10 +186,21 @@ mcp_readonly:readonly=your_secure_password
 
 ### Application-Level Security Gate
 
-All queries go through a security gate that:
-- **Blocks**: DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE, EXEC, LOAD, COPY
-- **Blocks**: Encoded bypass attempts (hex, UNHEX, CHAR)
-- **Allows**: SELECT, SHOW, DESCRIBE, TQL, EXPLAIN, UNION
+All queries go through a security gate that tokenizes SQL with the MySQL
+dialect rules GreptimeDB applies to the MySQL protocol, so strings, quoted
+identifiers and comments are delimited the same way the server delimits them.
+
+- **Allows**: statements starting with SELECT, WITH, SHOW, DESC, DESCRIBE,
+  EXPLAIN or TQL. Every statement in a multi-statement query is checked.
+- **Blocks**: every other statement, including DROP, DELETE, UPDATE, INSERT,
+  ALTER, CREATE, TRUNCATE, GRANT, REVOKE, ADMIN, SET, COPY and LOAD
+- **Blocks**: INSERT, UPDATE, DELETE, MERGE and INTO inside an allowed SQL
+  statement (TQL expressions are not checked for them), and EXPLAIN of a
+  blocked statement
+- **Blocks**: MySQL executable comments (`/*! ... */`), prefixed string
+  literals (`X'..'`, `N'..'`), and unterminated strings or comments
+- **Blocks**: the word `delimiter` followed by whitespace outside quotes,
+  because the MySQL client driver rewrites such SQL as a `DELIMITER` command
 
 ### Write Mode (Disabled by Default)
 
