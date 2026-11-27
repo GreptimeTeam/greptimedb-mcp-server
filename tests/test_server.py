@@ -89,6 +89,7 @@ def setup_state():
 
     server._state = None
 
+
 @pytest.mark.asyncio
 async def test_lifespan_passes_query_read_timeout_to_connection_pool():
     config = replace(
@@ -100,6 +101,7 @@ async def test_lifespan_passes_query_read_timeout_to_connection_pool():
         async with server.lifespan(server.mcp) as state:
             assert state.db_config["read_timeout"] == 45
             assert state.pool_config["read_timeout"] == 45
+
 
 @pytest.fixture
 def write_mode():

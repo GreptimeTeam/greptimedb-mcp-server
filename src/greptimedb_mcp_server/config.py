@@ -115,7 +115,6 @@ class Config:
     """
     query_read_timeout: int = DEFAULT_QUERY_READ_TIMEOUT
 
-
     @staticmethod
     def from_env_arguments() -> "Config":
         """
@@ -327,6 +326,7 @@ def _parse_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError(
         "expected a boolean value: true/false, 1/0, yes/no, or on/off"
     )
+
 
 def _parse_positive_int(value: str) -> int:
     """Parse a positive integer configuration value."""

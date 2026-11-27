@@ -274,6 +274,7 @@ class TestParseCommaSeparated:
             "127.0.0.1:*",
         ]
 
+
 @pytest.mark.parametrize("env_value", ["0", "-1", "-30", "abc"])
 def test_config_query_read_timeout_rejects_invalid_env_value(env_value):
     with patch.dict(
